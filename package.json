@@ -21,13 +21,15 @@
     "@react-three/fiber": "^8.17.10",
     "@react-three/drei": "^9.117.3",
     "proj4": "^2.12.1",
-    "clipper2-wasm": "^0.0.1"
+    "clipper2-wasm": "^0.0.1",
+    "leaflet": "^1.9.4"
   },
   "devDependencies": {
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@types/three": "^0.170.0",
     "@types/proj4": "^2.5.5",
+    "@types/leaflet": "^1.9.15",
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.0",
     "electron": "^33.2.0",
