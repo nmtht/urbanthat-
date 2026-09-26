@@ -28,7 +28,7 @@ export function ScenePanel(props: Props) {
       <div style={s.head}>
         <span style={s.title}>Scene</span>
         <button type="button" style={s.close} onClick={props.onClose} aria-label="Close">
-          \u2715
+          {'\u2715'}
         </button>
       </div>
 
