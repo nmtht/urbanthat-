@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import type { OverpassElement, OverpassResponse } from './overpassClient';
 import { projectRingToLocal, projectToLocal } from './projection';
 import type { SceneOrigin, Point2D, BBox } from '../domain/SceneOrigin';
-import { approxBboxSizeM } from '../domain/SceneOrigin';
 import {
   offsetPolyline,
   corridorPolygon,
@@ -187,19 +186,7 @@ export function buildOsmContextLayer(
   group.name = 'OsmContextLayer';
   group.userData.nonPickable = true;
   const clipRect = bboxToLocalRect(bbox, origin, 5);
-  const size = approxBboxSizeM(bbox);
-  const groundSize = Math.max(size.widthM, size.heightM) + 40;
-
-  {
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(groundSize, groundSize),
-      new THREE.MeshStandardMaterial({ color: '#3a3a38', roughness: 0.95, metalness: 0 })
-    );
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -0.02;
-    ground.userData.nonPickable = true;
-    group.add(ground);
-  }
+  // No full-scene ground plate: it z-fought with road meshes and looked like a box.
 
   const buildingMats = new Map<string, THREE.MeshStandardMaterial>();
   const getBuildingMat = (hex: string) => {
