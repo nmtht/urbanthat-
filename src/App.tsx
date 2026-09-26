@@ -194,8 +194,12 @@ function PickBridge({
       for (const hit of hits) {
         let obj: THREE.Object3D | null = hit.object;
         while (obj) {
-          if (obj.userData?.kind && obj.userData?.osmTags) {
+          if (obj.userData?.kind && obj.userData?.osmTags && !obj.userData?.nonPickable) {
             info = labelFromTags(obj.userData.kind, obj.userData.osmTags);
+            break;
+          }
+          if (obj.parent?.userData?.kind === 'building' && obj.parent.userData?.osmTags) {
+            info = labelFromTags('building', obj.parent.userData.osmTags);
             break;
           }
           obj = obj.parent;
@@ -338,8 +342,13 @@ export default function App() {
   }, [handleImport]);
 
   const performDelete = useCallback((sel: SelectedOsm) => {
-    const targets: THREE.Object3D[] = [sel.object];
-    cmdStack.current.push(new DeleteOsmCommand(targets, sel.kind));
+    const targets = sel.objects?.length ? sel.objects : [sel.object];
+    cmdStack.current.push(
+      new DeleteOsmCommand(
+        targets,
+        targets.length > 1 ? `${sel.kind} x${targets.length}` : sel.kind
+      )
+    );
     setSelected(null);
   }, []);
 
