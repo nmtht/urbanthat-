@@ -23,6 +23,7 @@ import {
   buildOsmContextLayer,
   disposeOsmContextLayer,
 } from './osm/osmContextLayer';
+import { setFacadeNightFactor } from './render/buildingFacades';
 
 interface OsmState {
   origin: SceneOrigin;
@@ -270,6 +271,10 @@ export default function App() {
   const abortRef = useRef<AbortController | null>(null);
   const lastBbox = useRef<BBox | null>(null);
 
+  useEffect(() => {
+    setFacadeNightFactor(hour);
+  }, [hour]);
+
   const clearOsm = useCallback(() => {
     setOsm((prev) => {
       if (prev) disposeOsmContextLayer(prev.group);
@@ -304,6 +309,7 @@ export default function App() {
           bbox,
         });
         setDialogOpen(false);
+        setFacadeNightFactor(hour);
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') return;
         const msg =
@@ -317,7 +323,7 @@ export default function App() {
         setLoading(false);
       }
     },
-    [clearOsm, quality, showTrees]
+    [clearOsm, quality, showTrees, hour]
   );
 
   const handleRefresh = useCallback(() => {
