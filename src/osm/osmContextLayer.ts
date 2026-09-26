@@ -11,6 +11,14 @@ import {
   type Rect,
 } from '../geometry/polylineOffset';
 import { roadProfile, isFootOnly } from './roadDefaults';
+import {
+  facadeStyleFromBuildingTag,
+  getFacadeMaterial,
+  getRoofMaterial,
+  ringPerimeter,
+  applyFacadeUVs,
+  facadeRepeat,
+} from '../render/buildingFacades';
 
 const DEFAULT_BUILDING_HEIGHT_M = 9;
 const FLOOR_HEIGHT_M = 3.3;
@@ -57,29 +65,6 @@ function buildingHeightM(tags?: Record<string, string>): number {
   const levels = parseLevels(tags);
   if (levels != null) return Math.min(levels * FLOOR_HEIGHT_M, 120);
   return DEFAULT_BUILDING_HEIGHT_M;
-}
-
-function buildingColors(tags?: Record<string, string>): { wall: THREE.Color; roof: THREE.Color } {
-  const t = tags?.building ?? 'yes';
-  const palette: Record<string, [string, string]> = {
-    apartments: ['#8a8580', '#5c574f'],
-    residential: ['#8b857c', '#5e594f'],
-    house: ['#9a8f82', '#6b6358'],
-    commercial: ['#7a8490', '#4a5360'],
-    retail: ['#7d8894', '#4d5662'],
-    office: ['#7b8490', '#4a5260'],
-    industrial: ['#6e6e6e', '#454545'],
-    warehouse: ['#6a6a6a', '#404040'],
-    school: ['#8a8078', '#5a544c'],
-    church: ['#8c8580', '#4a4540'],
-    yes: ['#7d7a76', '#524e4a'],
-  };
-  const [w, r] = palette[t] ?? palette.yes;
-  const wall = new THREE.Color(w);
-  const roof = new THREE.Color(r);
-  const jitter = ((tags?.name?.length ?? 3) % 7) * 0.008;
-  wall.offsetHSL(0, 0, jitter - 0.02);
-  return { wall, roof };
 }
 
 function ringToShape(ring: Point2D[]): THREE.Shape | null {
@@ -186,20 +171,23 @@ export function buildOsmContextLayer(
   group.name = 'OsmContextLayer';
   group.userData.nonPickable = true;
   const clipRect = bboxToLocalRect(bbox, origin, 5);
-  // No full-scene ground plate: it z-fought with road meshes and looked like a box.
 
-  const buildingMats = new Map<string, THREE.MeshStandardMaterial>();
-  const getBuildingMat = (hex: string) => {
-    let m = buildingMats.get(hex);
-    if (!m) {
-      m = new THREE.MeshStandardMaterial({ color: hex, roughness: 0.88, metalness: 0.05, transparent: true, opacity: 0.92 });
-      buildingMats.set(hex, m);
-    }
-    return m;
-  };
-
-  const waterMat = new THREE.MeshStandardMaterial({ color: '#2f5f7a', transparent: true, opacity: 0.72, roughness: 0.25, metalness: 0.1, depthWrite: false });
-  const greenMat = new THREE.MeshStandardMaterial({ color: '#3f6b48', transparent: true, opacity: 0.75, roughness: 0.92, metalness: 0, depthWrite: false });
+  const waterMat = new THREE.MeshStandardMaterial({
+    color: '#2f5f7a',
+    transparent: true,
+    opacity: 0.72,
+    roughness: 0.25,
+    metalness: 0.1,
+    depthWrite: false,
+  });
+  const greenMat = new THREE.MeshStandardMaterial({
+    color: '#3f6b48',
+    transparent: true,
+    opacity: 0.75,
+    roughness: 0.92,
+    metalness: 0,
+    depthWrite: false,
+  });
   const asphaltMat = new THREE.MeshStandardMaterial({ color: '#2c2c2e', roughness: 0.85, metalness: 0.05 });
   const sidewalkMat = new THREE.MeshStandardMaterial({ color: '#5a5a58', roughness: 0.9, metalness: 0 });
   const footMat = new THREE.MeshStandardMaterial({ color: '#4a4844', roughness: 0.9, metalness: 0 });
@@ -235,13 +223,18 @@ export function buildOsmContextLayer(
       const shape = ringToShape(clipped);
       if (!shape) continue;
       const height = buildingHeightM(tags);
-      const { wall, roof } = buildingColors(tags);
+      const style = facadeStyleFromBuildingTag(tags.building);
+      const peri = ringPerimeter(clipped);
+      const { repU, repV } = facadeRepeat(style, peri, height);
       const geom = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false });
+      applyFacadeUVs(geom, repU, repV);
       geom.rotateX(-Math.PI / 2);
-      const mesh = new THREE.Mesh(geom, getBuildingMat('#' + wall.getHexString()));
+      const wallMat = getFacadeMaterial(style, peri * 0.35, height);
+      const mesh = new THREE.Mesh(geom, wallMat);
       mesh.userData.nonPickable = true;
+      mesh.userData.osmId = el.id;
       group.add(mesh);
-      const roofMesh = flatMeshFromRing(clipped, height + 0.05, getBuildingMat('#' + roof.getHexString()));
+      const roofMesh = flatMeshFromRing(clipped, height + 0.06, getRoofMaterial(style));
       if (roofMesh) group.add(roofMesh);
       buildingCount++;
       continue;
@@ -254,11 +247,18 @@ export function buildOsmContextLayer(
       for (const seg of clipPolylineToRect(ring, clipRect)) {
         if (seg.length < 2) continue;
         const half = profile.widthM / 2;
-        const { carriage, sidewalkOuter } = buildRoadPolys(seg, half, isFootOnly(tags.highway) ? 0 : profile.sidewalkM);
+        const { carriage, sidewalkOuter } = buildRoadPolys(
+          seg,
+          half,
+          isFootOnly(tags.highway) ? 0 : profile.sidewalkM
+        );
         const carClipped = clipPolygonToRect(carriage, clipRect);
         if (carClipped.length >= 3) {
           const mesh = flatMeshFromRing(carClipped, 0.04, isFootOnly(tags.highway) ? footMat : asphaltMat);
-          if (mesh) { group.add(mesh); roadCount++; }
+          if (mesh) {
+            group.add(mesh);
+            roadCount++;
+          }
         }
         if (sidewalkOuter) {
           const sw = clipPolygonToRect(sidewalkOuter, clipRect);
@@ -288,7 +288,12 @@ export function buildOsmContextLayer(
           const step = Math.max(1, Math.floor(ring.length / 6));
           for (let i = 0; i < ring.length; i += step) {
             const p = ring[i];
-            if (p.x >= clipRect.minX && p.x <= clipRect.maxX && p.y >= clipRect.minY && p.y <= clipRect.maxY) {
+            if (
+              p.x >= clipRect.minX &&
+              p.x <= clipRect.maxX &&
+              p.y >= clipRect.minY &&
+              p.y <= clipRect.maxY
+            ) {
               treePositions.push(localToWorld(p, 0));
             }
           }
@@ -300,7 +305,10 @@ export function buildOsmContextLayer(
   if (lanePositions.length > 0) {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(lanePositions, 3));
-    const lines = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: '#c8c4a8', transparent: true, opacity: 0.55 }));
+    const lines = new THREE.LineSegments(
+      g,
+      new THREE.LineBasicMaterial({ color: '#c8c4a8', transparent: true, opacity: 0.55 })
+    );
     lines.userData.nonPickable = true;
     group.add(lines);
   }
