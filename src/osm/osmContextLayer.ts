@@ -3,13 +3,14 @@ import type { OverpassElement, OverpassResponse } from './overpassClient';
 import { projectRingToLocal, projectToLocal } from './projection';
 import type { SceneOrigin, Point2D, BBox } from '../domain/SceneOrigin';
 import {
-  offsetPolyline,
   corridorPolygon,
   clipPolygonToRect,
   clipPolylineToRect,
   simplifyPolyline,
+  roundOffsetPolyline,
   type Rect,
 } from '../geometry/polylineOffset';
+import { unionPolygons, circlePolygon } from '../geometry/polygonBoolean';
 import { roadProfile, isFootOnly } from './roadDefaults';
 import {
   facadeStyleFromBuildingTag,
@@ -18,6 +19,7 @@ import {
   ringPerimeter,
   applyFacadeUVs,
   facadeRepeat,
+  type FacadeQuality,
 } from '../render/buildingFacades';
 
 const DEFAULT_BUILDING_HEIGHT_M = 9;
@@ -34,7 +36,7 @@ export interface OsmContextMeshes {
 }
 
 export interface OsmBuildOptions {
-  quality?: 'low' | 'med';
+  quality?: FacadeQuality;
   showTrees?: boolean;
 }
 
@@ -110,26 +112,32 @@ function isWater(tags: Record<string, string>): boolean {
 function isGreen(tags: Record<string, string>): boolean {
   if (tags.leisure === 'park' || tags.leisure === 'garden' || tags.leisure === 'pitch') return true;
   const lu = tags.landuse;
-  if (lu === 'grass' || lu === 'forest' || lu === 'meadow' || lu === 'recreation_ground' || lu === 'village_green' || lu === 'orchard') return true;
+  if (
+    lu === 'grass' ||
+    lu === 'forest' ||
+    lu === 'meadow' ||
+    lu === 'recreation_ground' ||
+    lu === 'village_green' ||
+    lu === 'orchard'
+  )
+    return true;
   if (tags.natural === 'wood' || tags.natural === 'scrub' || tags.natural === 'grassland') return true;
   return false;
 }
 
-function addPolygonMeshes(ring: Point2D[], rect: Rect, yUp: number, mat: THREE.Material, group: THREE.Group): boolean {
+function addPolygonMeshes(
+  ring: Point2D[],
+  rect: Rect,
+  yUp: number,
+  mat: THREE.Material,
+  group: THREE.Group
+): boolean {
   const clipped = clipPolygonToRect(ring, rect);
   if (clipped.length < 3) return false;
   const mesh = flatMeshFromRing(clipped, yUp, mat);
   if (!mesh) return false;
   group.add(mesh);
   return true;
-}
-
-function buildRoadPolys(centerline: Point2D[], halfW: number, sidewalk: number): { carriage: Point2D[]; sidewalkOuter: Point2D[] | null } {
-  const { left, right } = offsetPolyline(centerline, halfW);
-  const carriage = corridorPolygon(left, right);
-  if (sidewalk <= 0.05) return { carriage, sidewalkOuter: null };
-  const outer = offsetPolyline(centerline, halfW + sidewalk);
-  return { carriage, sidewalkOuter: corridorPolygon(outer.left, outer.right) };
 }
 
 function dashedCenterLine(centerline: Point2D[], yUp: number, positions: number[]): void {
@@ -173,7 +181,7 @@ export function buildOsmContextLayer(
   bbox: BBox,
   options?: OsmBuildOptions
 ): OsmContextMeshes {
-  const quality = options?.quality ?? 'med';
+  const quality = (options?.quality ?? 'med') as FacadeQuality;
   const showTrees = options?.showTrees !== false;
   const group = new THREE.Group();
   group.name = 'OsmContextLayer';
@@ -227,6 +235,10 @@ export function buildOsmContextLayer(
   let greenCount = 0;
   const treePositions: THREE.Vector3[] = [];
   const lanePositions: number[] = [];
+  const asphaltPolys: Point2D[][] = [];
+  const sidewalkPolys: Point2D[][] = [];
+  const footPolys: Point2D[][] = [];
+  const roadTagSamples: Record<string, string>[] = [];
 
   for (const el of data.elements) {
     if (!el.tags) continue;
@@ -234,9 +246,47 @@ export function buildOsmContextLayer(
     if (el.type === 'node' && el.tags.natural === 'tree') {
       if (el.lat != null && el.lon != null) {
         const p = projectToLocal(el.lat, el.lon, origin);
-        if (p.x >= clipRect.minX && p.x <= clipRect.maxX && p.y >= clipRect.minY && p.y <= clipRect.maxY) {
+        if (
+          p.x >= clipRect.minX &&
+          p.x <= clipRect.maxX &&
+          p.y >= clipRect.minY &&
+          p.y <= clipRect.maxY
+        ) {
           treePositions.push(localToWorld(p, 0));
         }
+      }
+      continue;
+    }
+
+    if (el.type === 'relation' && el.members) {
+      const outers: Point2D[][] = [];
+      for (const m of el.members) {
+        if (m.role !== 'outer' || m.type !== 'way') continue;
+        if (m.geometry && m.geometry.length >= 3) {
+          const ring = projectRingToLocal(
+            m.geometry.map((g) => ({ lat: g.lat, lon: g.lon })),
+            origin
+          );
+          if (ring.length >= 3) outers.push(ring);
+          continue;
+        }
+        const way = data.elements.find((e) => e.type === 'way' && e.id === m.ref);
+        if (!way) continue;
+        const ring = wayToLocalRing(way, origin);
+        if (ring && ring.length >= 3) outers.push(ring);
+      }
+      if (outers.length === 0) continue;
+      if (isWater(el.tags)) {
+        for (const ring of outers) {
+          if (addPolygonMeshes(ring, clipRect, 0.01, waterMat, group)) waterCount++;
+        }
+        continue;
+      }
+      if (isGreen(el.tags)) {
+        for (const ring of outers) {
+          if (addPolygonMeshes(ring, clipRect, 0.015, greenMat, group)) greenCount++;
+        }
+        continue;
       }
       continue;
     }
@@ -258,7 +308,7 @@ export function buildOsmContextLayer(
       const geom = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false });
       applyFacadeUVs(geom, repU, repV);
       geom.rotateX(-Math.PI / 2);
-      const wallMat = getFacadeMaterial(style, peri * 0.35, height);
+      const wallMat = getFacadeMaterial(style, peri * 0.35, height, quality);
       const mesh = new THREE.Mesh(geom, wallMat);
       mesh.userData.nonPickable = false;
       mesh.userData.osmId = el.id;
@@ -277,37 +327,38 @@ export function buildOsmContextLayer(
     if (tags.highway) {
       const ring = wayToLocalRing(el, origin);
       if (!ring || ring.length < 2) continue;
-      if (quality === 'low' && (isFootOnly(tags.highway) || tags.highway === 'service' || tags.highway === 'track')) {
+      if (
+        quality === 'low' &&
+        (isFootOnly(tags.highway) || tags.highway === 'service' || tags.highway === 'track')
+      ) {
         continue;
       }
       const profile = roadProfile(tags.highway, tags);
+      const foot = isFootOnly(tags.highway);
       for (const seg of clipPolylineToRect(ring, clipRect)) {
         if (seg.length < 2) continue;
         const half = profile.widthM / 2;
-        const { carriage, sidewalkOuter } = buildRoadPolys(
-          seg,
-          half,
-          isFootOnly(tags.highway) ? 0 : profile.sidewalkM
-        );
+        const { left, right } = roundOffsetPolyline(seg, half);
+        const carriage = corridorPolygon(left, right);
         const carClipped = clipPolygonToRect(carriage, clipRect);
         if (carClipped.length >= 3) {
-          const mesh = flatMeshFromRing(carClipped, 0.05, isFootOnly(tags.highway) ? footMat : asphaltMat);
-          if (mesh) {
-            mesh.userData.kind = 'road';
-            mesh.userData.osmTags = tags;
-            mesh.userData.nonPickable = false;
-            group.add(mesh);
-            roadCount++;
-          }
+          if (foot) footPolys.push(carClipped);
+          else asphaltPolys.push(carClipped);
+          roadTagSamples.push(tags);
+          roadCount++;
         }
-        if (sidewalkOuter) {
-          const sw = clipPolygonToRect(sidewalkOuter, clipRect);
-          if (sw.length >= 3) {
-            const mesh = flatMeshFromRing(sw, 0.02, sidewalkMat);
-            if (mesh) group.add(mesh);
-          }
+        if (!foot && profile.sidewalkM > 0.05) {
+          const outer = roundOffsetPolyline(seg, half + profile.sidewalkM);
+          const swPoly = corridorPolygon(outer.left, outer.right);
+          const sw = clipPolygonToRect(swPoly, clipRect);
+          if (sw.length >= 3) sidewalkPolys.push(sw);
         }
         if (profile.centerLine && profile.lanes >= 2) dashedCenterLine(seg, 0.06, lanePositions);
+        if (!foot && seg.length >= 2) {
+          for (let vi = 1; vi < seg.length - 1; vi++) {
+            asphaltPolys.push(circlePolygon(seg[vi].x, seg[vi].y, half * 1.05, 12));
+          }
+        }
       }
       continue;
     }
@@ -339,6 +390,29 @@ export function buildOsmContextLayer(
           }
         }
       }
+    }
+  }
+
+  for (const poly of unionPolygons(asphaltPolys)) {
+    const mesh = flatMeshFromRing(poly, 0.05, asphaltMat);
+    if (mesh) {
+      mesh.userData.kind = 'road';
+      mesh.userData.osmTags = roadTagSamples[0] ?? { highway: 'residential' };
+      mesh.userData.nonPickable = false;
+      group.add(mesh);
+    }
+  }
+  for (const poly of unionPolygons(sidewalkPolys)) {
+    const mesh = flatMeshFromRing(poly, 0.02, sidewalkMat);
+    if (mesh) group.add(mesh);
+  }
+  for (const poly of unionPolygons(footPolys)) {
+    const mesh = flatMeshFromRing(poly, 0.04, footMat);
+    if (mesh) {
+      mesh.userData.kind = 'road';
+      mesh.userData.osmTags = { highway: 'footway' };
+      mesh.userData.nonPickable = false;
+      group.add(mesh);
     }
   }
 
@@ -386,7 +460,11 @@ export function buildOsmContextLayer(
 
 export function disposeOsmContextLayer(group: THREE.Group): void {
   group.traverse((obj) => {
-    if (obj instanceof THREE.Mesh || obj instanceof THREE.LineSegments || obj instanceof THREE.InstancedMesh) {
+    if (
+      obj instanceof THREE.Mesh ||
+      obj instanceof THREE.LineSegments ||
+      obj instanceof THREE.InstancedMesh
+    ) {
       obj.geometry?.dispose();
       const mat = obj.material;
       if (Array.isArray(mat)) mat.forEach((x) => x.dispose());
