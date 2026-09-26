@@ -23,15 +23,35 @@ const ENDPOINTS = [
   'https://overpass-api.openstreetmap.fr/api/interpreter',
 ];
 
-const DEFAULT_TIMEOUT_MS = 25_000;
+const DEFAULT_TIMEOUT_MS = 30_000;
 
 function buildQuery(bbox: BBox): string {
   const { south, west, north, east } = bbox;
+  const bb = `${south},${west},${north},${east}`;
+  // Buildings, roads, water, greenery (ways with geometry).
+  // Relations/multipolygons omitted for MVP simplicity.
   return `
-[out:json][timeout:25];
+[out:json][timeout:30];
 (
-  way["building"](${south},${west},${north},${east});
-  way["highway"](${south},${west},${north},${east});
+  way["building"](${bb});
+  way["highway"](${bb});
+  way["natural"="water"](${bb});
+  way["waterway"="riverbank"](${bb});
+  way["landuse"="reservoir"](${bb});
+  way["landuse"="basin"](${bb});
+  way["natural"="bay"](${bb});
+  way["leisure"="park"](${bb});
+  way["leisure"="garden"](${bb});
+  way["leisure"="pitch"](${bb});
+  way["landuse"="grass"](${bb});
+  way["landuse"="forest"](${bb});
+  way["landuse"="meadow"](${bb});
+  way["landuse"="recreation_ground"](${bb});
+  way["landuse"="village_green"](${bb});
+  way["landuse"="orchard"](${bb});
+  way["natural"="wood"](${bb});
+  way["natural"="scrub"](${bb});
+  way["natural"="grassland"](${bb});
 );
 out geom;
 `.trim();
@@ -49,7 +69,7 @@ export class OverpassError extends Error {
 }
 
 /**
- * Fetch buildings + highways for a bbox.
+ * Fetch buildings, highways, water and greenery for a bbox.
  * Tries endpoints in order until one succeeds.
  */
 export async function fetchOsmFragment(
