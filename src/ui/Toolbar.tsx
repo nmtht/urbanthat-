@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 
-export type ToolId = 'select' | 'road' | 'zone' | 'import';
+export type ToolId = 'select' | 'delete' | 'road' | 'zone' | 'import';
 
 interface Props {
   active: ToolId;
@@ -10,7 +10,8 @@ interface Props {
 }
 
 const ITEMS: Array<{ id: ToolId; label: string; title: string }> = [
-  { id: 'select', label: 'Select', title: 'Select' },
+  { id: 'select', label: 'Select', title: 'Select (V)' },
+  { id: 'delete', label: 'Delete', title: 'Delete tool — click to remove (Del)' },
   { id: 'road', label: 'Road', title: 'Road brush (soon)' },
   { id: 'zone', label: 'Zone', title: 'Zone brush (soon)' },
   { id: 'import', label: 'Import', title: 'Import map fragment' },
@@ -18,6 +19,7 @@ const ITEMS: Array<{ id: ToolId; label: string; title: string }> = [
 
 const FALLBACK: Record<ToolId, string> = {
   select: '\u232A',
+  delete: '\u232B',
   road: '\u2550',
   zone: '\u25A2',
   import: '\u2193',
@@ -33,7 +35,7 @@ export function Toolbar({ active, onChange, onImport, disabled }: Props) {
             key={item.id}
             type="button"
             title={item.title}
-            disabled={disabled}
+            disabled={disabled && item.id !== 'import'}
             style={{
               ...s.btn,
               ...(isActive ? s.btnActive : null),
@@ -87,8 +89,9 @@ const s: Record<string, CSSProperties> = {
     fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif',
   },
   btnActive: {
-    background: 'rgba(10,132,255,0.95)',
-    color: '#fff',
+    background: 'rgba(72,72,74,0.98)',
+    color: '#f5f5f7',
+    boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.12)',
   },
   icon: {
     fontSize: 18,
