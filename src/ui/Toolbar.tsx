@@ -18,11 +18,11 @@ const ITEMS: Array<{ id: ToolId; label: string; title: string }> = [
 ];
 
 const FALLBACK: Record<ToolId, string> = {
-  select: '\u232A',
-  delete: '\u232B',
-  road: '\u2550',
-  zone: '\u25A2',
-  import: '\u2193',
+  select: '〉',
+  delete: '⌫',
+  road: '═',
+  zone: '▢',
+  import: '↓',
 };
 
 export function Toolbar({ active, onChange, onImport, disabled }: Props) {

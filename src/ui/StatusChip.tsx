@@ -15,42 +15,35 @@ interface Props {
 }
 
 function fmt(n: number): string {
-  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
   return String(n);
 }
 
 export function StatusChip({ counts, loading, message }: Props) {
   if (loading) {
-    return <div style={s.chip}>Fetching OSM\u2026</div>;
+    return <div style={s.chip}>Fetching OSM…</div>;
   }
   if (!counts) {
-    return <div style={s.chipMuted}>{message ?? 'Urban That'}</div>;
+    return (
+      <div style={s.chip}>
+        <span style={s.brand}>{message ?? 'Urban That'}</span>
+      </div>
+    );
   }
-  const tip = [
-    `${counts.buildingCount} buildings`,
-    `${counts.roadCount} roads`,
-    `${counts.waterCount} water`,
-    `${counts.greenCount} green`,
-    `${counts.treeCount} trees`,
-  ].join(' \u00b7 ');
+  const parts = [
+    `${fmt(counts.buildingCount)} bld`,
+    `${fmt(counts.roadCount)} roads`,
+  ];
+  if (counts.waterCount) parts.push(`${fmt(counts.waterCount)} water`);
+  if (counts.greenCount) parts.push(`${fmt(counts.greenCount)} green`);
+  if (counts.treeCount) parts.push(`${fmt(counts.treeCount)} trees`);
+  const text = parts.join(' · ');
 
   return (
-    <div style={s.chip} title={tip}>
-      <span>{fmt(counts.buildingCount)} bld</span>
-      <span style={s.dot}>\u00b7</span>
-      <span>{fmt(counts.roadCount)} roads</span>
-      {counts.waterCount > 0 && (
-        <>
-          <span style={s.dot}>\u00b7</span>
-          <span>{fmt(counts.waterCount)} water</span>
-        </>
-      )}
-      {counts.treeCount > 0 && (
-        <>
-          <span style={s.dot}>\u00b7</span>
-          <span>{fmt(counts.treeCount)} trees</span>
-        </>
-      )}
+    <div style={s.chip} title={text}>
+      <span style={s.brand}>{message ?? 'Urban That'}</span>
+      <span style={s.dot}>·</span>
+      <span style={s.counts}>{text}</span>
     </div>
   );
 }
@@ -59,30 +52,19 @@ const s: Record<string, CSSProperties> = {
   chip: {
     display: 'inline-flex',
     alignItems: 'center',
-    gap: 4,
+    gap: 6,
     padding: '6px 12px',
     borderRadius: 20,
-    background: 'rgba(44,44,46,0.72)',
-    backdropFilter: 'blur(16px)',
-    color: 'rgba(255,255,255,0.9)',
-    fontSize: 12,
-    fontWeight: 500,
-    fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif',
-    letterSpacing: '-0.01em',
-    boxShadow: '0 2px 12px rgba(0,0,0,0.25)',
-    maxWidth: '100%',
-  },
-  chipMuted: {
-    display: 'inline-flex',
-    padding: '6px 12px',
-    borderRadius: 20,
-    background: 'rgba(44,44,46,0.5)',
-    color: 'rgba(255,255,255,0.55)',
+    background: 'rgba(44,44,46,0.78)',
+    backdropFilter: 'blur(12px)',
+    color: '#f5f5f7',
     fontSize: 12,
     fontFamily: '-apple-system, BlinkMacSystemFont, system-ui, sans-serif',
+    pointerEvents: 'auto',
+    maxWidth: 420,
+    overflow: 'hidden',
   },
-  dot: {
-    opacity: 0.4,
-    margin: '0 2px',
-  },
+  brand: { fontWeight: 600, opacity: 0.9 },
+  dot: { opacity: 0.35 },
+  counts: { opacity: 0.7, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
 };

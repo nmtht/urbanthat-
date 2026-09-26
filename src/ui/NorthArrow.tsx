@@ -11,7 +11,7 @@ export function NorthArrow({ visible, yawDeg = 0 }: Props) {
   return (
     <div style={s.wrap} title="North">
       <div style={{ ...s.rose, transform: `rotate(${rot}deg)` }}>
-        <div style={s.arrow}>\u25B2</div>
+        <div style={s.arrow}>▲</div>
         <div style={s.n}>N</div>
       </div>
     </div>
