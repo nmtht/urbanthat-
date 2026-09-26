@@ -32,11 +32,10 @@ function sunFromHour(hour: number): THREE.Vector3 {
   const t = ((hour - 6) / 12) * Math.PI;
   const elevation = Math.sin(t);
   const azimuth = ((hour - 12) / 12) * Math.PI;
-  const r = 120;
-  const y = Math.max(elevation, -0.15) * 80;
-  const x = Math.cos(azimuth) * r;
-  const z = Math.sin(azimuth) * r * 0.6;
-  return new THREE.Vector3(x, y, z);
+  const y = Math.max(elevation, -0.05);
+  const x = Math.cos(azimuth);
+  const z = Math.sin(azimuth) * 0.65;
+  return new THREE.Vector3(x, y, z).normalize().multiplyScalar(100);
 }
 
 function CameraFit({
@@ -61,39 +60,70 @@ function CameraFit({
   return null;
 }
 
-function Environment({ hour }: { hour: number }) {
+/** Sky that fills the view: atmospheric dome + fog — not a finite box. */
+function Atmosphere({ hour }: { hour: number }) {
+  const { scene, camera, gl } = useThree();
   const sun = useMemo(() => sunFromHour(hour), [hour]);
   const elev = sun.y;
-  const isNight = elev < 5;
+  const isNight = elev < 8;
+
+  useEffect(() => {
+    const cam = camera as THREE.PerspectiveCamera;
+    cam.near = 0.5;
+    cam.far = 80_000;
+    cam.updateProjectionMatrix();
+
+    if (isNight) {
+      scene.background = new THREE.Color('#070a10');
+      scene.fog = new THREE.FogExp2(0x070a10, 0.00012);
+      gl.setClearColor('#070a10');
+    } else {
+      const horizon = elev < 28 ? 0xc4a888 : 0xc5d6ea;
+      scene.background = null;
+      scene.fog = new THREE.FogExp2(horizon, elev < 28 ? 0.0001 : 0.00006);
+      gl.setClearColor(horizon);
+    }
+
+    return () => {
+      scene.fog = null;
+      scene.background = null;
+    };
+  }, [isNight, elev, scene, camera, gl]);
 
   if (isNight) {
     return (
       <>
-        <color attach="background" args={['#0b0e14']} />
-        <ambientLight intensity={0.22} />
-        <directionalLight position={[sun.x, Math.abs(sun.y) + 20, sun.z]} intensity={0.12} color="#a8b4c8" />
-        <Stars radius={400} depth={80} count={5000} factor={3} saturation={0} fade speed={0.35} />
+        <ambientLight intensity={0.2} />
+        <directionalLight
+          position={[sun.x, Math.max(Math.abs(sun.y), 30), sun.z]}
+          intensity={0.12}
+          color="#a8b4c8"
+        />
+        <Stars radius={600} depth={120} count={6000} factor={3.5} saturation={0} fade speed={0.3} />
       </>
     );
   }
 
-  const dusk = elev < 25;
+  const dusk = elev < 28;
   return (
     <>
       <Sky
+        distance={450_000}
         sunPosition={[sun.x, sun.y, sun.z]}
-        turbidity={dusk ? 7 : 3.5}
-        rayleigh={dusk ? 2.2 : 1.1}
-        mieCoefficient={dusk ? 0.012 : 0.005}
-        mieDirectionalG={0.8}
+        turbidity={dusk ? 8 : 3.2}
+        rayleigh={dusk ? 2.4 : 1.0}
+        mieCoefficient={dusk ? 0.012 : 0.004}
+        mieDirectionalG={0.85}
       />
-      <ambientLight intensity={dusk ? 0.35 : 0.48} color={dusk ? '#ffd0b0' : '#ffffff'} />
+      <ambientLight intensity={dusk ? 0.32 : 0.5} color={dusk ? '#ffd0b0' : '#ffffff'} />
       <directionalLight
         position={[sun.x, sun.y, sun.z]}
-        intensity={dusk ? 0.85 : 1.2}
+        intensity={dusk ? 0.9 : 1.25}
         color={dusk ? '#ff9a5c' : '#fff5e6'}
       />
-      <hemisphereLight args={[dusk ? '#ffb070' : '#c8daf0', '#3a3a38', dusk ? 0.4 : 0.35]} />
+      <hemisphereLight
+        args={[dusk ? '#ffb070' : '#d0e4f8', '#3c3c38', dusk ? 0.45 : 0.4]}
+      />
     </>
   );
 }
@@ -127,11 +157,6 @@ export default function App() {
         const data = await fetchOsmFragment(bbox, { signal: ac.signal });
         const ways = data.elements.filter((e) => e.type === 'way');
         const waysGeom = ways.filter((e) => e.geometry && e.geometry.length >= 2);
-        console.info('[OSM]', {
-          total: data.elements.length,
-          ways: ways.length,
-          waysWithGeometry: waysGeom.length,
-        });
 
         const center = bboxCenter(bbox);
         const origin = createSceneOrigin(center.lat, center.lon);
@@ -190,25 +215,25 @@ export default function App() {
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
       <Canvas
-        camera={{ position: [80, 60, 80], fov: 45, near: 0.1, far: 8000 }}
+        camera={{ position: [80, 60, 80], fov: 45, near: 0.5, far: 80_000 }}
         gl={{ antialias: true, alpha: false }}
         style={{ background: '#1c1c1e' }}
         onCreated={({ gl }) => {
-          gl.setClearColor('#1c1c1e');
+          gl.setClearColor('#c5d6ea');
           gl.toneMapping = THREE.ACESFilmicToneMapping;
           gl.toneMappingExposure = 1.05;
         }}
       >
-        <Environment hour={hour} />
-        <Suspense fallback={null}>{!osm && <GroundPlane size={2000} />}</Suspense>
+        <Atmosphere hour={hour} />
+        <Suspense fallback={null}>{!osm && <GroundPlane size={400} />}</Suspense>
         <group>{osm && <primitive object={osm.group} />}</group>
         <OrbitControls
           makeDefault
           enableDamping
           dampingFactor={0.08}
           minDistance={10}
-          maxDistance={3000}
-          maxPolarAngle={Math.PI / 2.05}
+          maxDistance={12_000}
+          maxPolarAngle={Math.PI / 2.02}
         />
         <CameraFit target={fitTarget} />
       </Canvas>
