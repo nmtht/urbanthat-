@@ -3,11 +3,11 @@ import type { OverpassElement, OverpassResponse } from './overpassClient';
 import { projectRingToLocal, projectToLocal } from './projection';
 import type { SceneOrigin, Point2D, BBox } from '../domain/SceneOrigin';
 import {
+  offsetPolyline,
   corridorPolygon,
   clipPolygonToRect,
   clipPolylineToRect,
   simplifyPolyline,
-  roundOffsetPolyline,
   type Rect,
 } from '../geometry/polylineOffset';
 import { circlePolygon } from '../geometry/polygonBoolean';
@@ -103,9 +103,11 @@ function wayToLocalRing(el: OverpassElement, origin: SceneOrigin): Point2D[] | n
 }
 
 function isWater(tags: Record<string, string>): boolean {
-  if (tags.natural === 'water' || tags.natural === 'bay') return true;
+  // Exclude natural=bay (often huge coastal polygons that flood the scene)
+  if (tags.natural === 'water') return true;
   if (tags.waterway === 'riverbank') return true;
   if (tags.landuse === 'reservoir' || tags.landuse === 'basin') return true;
+  if (tags.water === 'river' || tags.water === 'oxbow') return true;
   return false;
 }
 
@@ -125,15 +127,43 @@ function isGreen(tags: Record<string, string>): boolean {
   return false;
 }
 
+function polygonArea(ring: Point2D[]): number {
+  let a = 0;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    a += ring[j].x * ring[i].y - ring[i].x * ring[j].y;
+  }
+  return Math.abs(a) * 0.5;
+}
+
+function isClosedRing(ring: Point2D[], tol = 2.0): boolean {
+  if (ring.length < 3) return false;
+  const a = ring[0];
+  const b = ring[ring.length - 1];
+  return Math.hypot(a.x - b.x, a.y - b.y) < tol;
+}
+
 function addPolygonMeshes(
   ring: Point2D[],
   rect: Rect,
   yUp: number,
   mat: THREE.Material,
-  group: THREE.Group
+  group: THREE.Group,
+  opts?: { maxAreaFrac?: number; requireClosed?: boolean }
 ): boolean {
+  if (opts?.requireClosed && !isClosedRing(ring) && ring.length > 4) {
+    // open ring — still try clip, reject if result is huge via maxAreaFrac
+  }
   const clipped = clipPolygonToRect(ring, rect);
   if (clipped.length < 3) return false;
+  const area = polygonArea(clipped);
+  if (area < 4) return false;
+  if (opts?.maxAreaFrac != null) {
+    const bboxA = (rect.maxX - rect.minX) * (rect.maxY - rect.minY);
+    if (bboxA > 0 && area / bboxA > opts.maxAreaFrac) {
+      // Flood from bad multipolygon / failed clip — skip
+      return false;
+    }
+  }
   const mesh = flatMeshFromRing(clipped, yUp, mat);
   if (!mesh) return false;
   group.add(mesh);
@@ -278,7 +308,13 @@ export function buildOsmContextLayer(
       if (outers.length === 0) continue;
       if (isWater(el.tags)) {
         for (const ring of outers) {
-          if (addPolygonMeshes(ring, clipRect, 0.01, waterMat, group)) waterCount++;
+          if (
+            addPolygonMeshes(ring, clipRect, -0.02, waterMat, group, {
+              maxAreaFrac: 0.55,
+              requireClosed: true,
+            })
+          )
+            waterCount++;
         }
         continue;
       }
@@ -337,26 +373,32 @@ export function buildOsmContextLayer(
       const foot = isFootOnly(tags.highway);
       for (const seg of clipPolylineToRect(ring, clipRect)) {
         if (seg.length < 2) continue;
+        const clean = simplifyPolyline(seg, 0.8);
+        if (clean.length < 2) continue;
         const half = profile.widthM / 2;
-        const { left, right } = roundOffsetPolyline(seg, half);
-        const carriage = corridorPolygon(left, right);
-        const carClipped = clipPolygonToRect(carriage, clipRect);
-        if (carClipped.length >= 3) {
-          if (foot) footPolys.push(carClipped);
-          else asphaltPolys.push(carClipped);
-          roadTagSamples.push(tags);
-          roadCount++;
+        // Stable miter offset (roundOffset caused gaps / bowties at joints)
+        const { left, right } = offsetPolyline(clean, half, 2.5);
+        if (left.length >= 2 && right.length >= 2) {
+          const carriage = corridorPolygon(left, right);
+          if (carriage.length >= 3 && polygonArea(carriage) > 1) {
+            if (foot) footPolys.push(carriage);
+            else asphaltPolys.push(carriage);
+            roadTagSamples.push(tags);
+            roadCount++;
+          }
         }
-        if (!foot && profile.sidewalkM > 0.05) {
-          const outer = roundOffsetPolyline(seg, half + profile.sidewalkM);
-          const swPoly = corridorPolygon(outer.left, outer.right);
-          const sw = clipPolygonToRect(swPoly, clipRect);
-          if (sw.length >= 3) sidewalkPolys.push(sw);
+        if (!foot && profile.sidewalkM > 0.4) {
+          const { left: l2, right: r2 } = offsetPolyline(clean, half + profile.sidewalkM, 2.5);
+          if (l2.length >= 2 && r2.length >= 2) {
+            const sw = corridorPolygon(l2, r2);
+            if (sw.length >= 3) sidewalkPolys.push(sw);
+          }
         }
-        if (profile.centerLine && profile.lanes >= 2) dashedCenterLine(seg, 0.06, lanePositions);
-        if (!foot && seg.length >= 2) {
-          for (let vi = 1; vi < seg.length - 1; vi++) {
-            asphaltPolys.push(circlePolygon(seg[vi].x, seg[vi].y, half * 1.05, 12));
+        if (profile.centerLine && profile.lanes >= 2) dashedCenterLine(clean, 0.08, lanePositions);
+        // Junction pads at EVERY vertex — closes T-junctions / corners
+        if (!foot) {
+          for (const pt of clean) {
+            asphaltPolys.push(circlePolygon(pt.x, pt.y, half * 1.15, 14));
           }
         }
       }
@@ -366,7 +408,13 @@ export function buildOsmContextLayer(
     if (isWater(tags)) {
       const ring = wayToLocalRing(el, origin);
       if (!ring || ring.length < 3) continue;
-      if (addPolygonMeshes(ring, clipRect, 0.01, waterMat, group)) waterCount++;
+      if (
+        addPolygonMeshes(ring, clipRect, -0.02, waterMat, group, {
+          maxAreaFrac: 0.55,
+          requireClosed: true,
+        })
+      )
+        waterCount++;
       continue;
     }
 
@@ -393,7 +441,6 @@ export function buildOsmContextLayer(
     }
   }
 
-  // Direct meshes — union collapsed thin corridors into invalid shapes
   for (let i = 0; i < asphaltPolys.length; i++) {
     const mesh = flatMeshFromRing(asphaltPolys[i], 0.05, asphaltMat);
     if (mesh) {
