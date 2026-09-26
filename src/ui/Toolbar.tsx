@@ -13,7 +13,7 @@ const ITEMS: Array<{ id: ToolId; label: string; title: string }> = [
   { id: 'select', label: 'Select', title: 'Select (V)' },
   { id: 'delete', label: 'Delete', title: 'Delete tool — click to remove (Del)' },
   { id: 'road', label: 'Road', title: 'Road brush (soon)' },
-  { id: 'zone', label: 'Zone', title: 'Zone brush (soon)' },
+  { id: 'zone', label: 'Zone', title: 'Zone (Z) — drag rectangle' },
   { id: 'import', label: 'Import', title: 'Import map fragment' },
 ];
 
