@@ -502,7 +502,7 @@ export default function App() {
           style={hud.undo}
           title={cmdStack.current.lastLabel ? `Undo: ${cmdStack.current.lastLabel} (Cmd+Z)` : 'Nothing to undo'}
         >
-          \u2304 {cmdStack.current.undoCount}
+          {'\u2304'} {cmdStack.current.undoCount}
           {selected ? ` \u00b7 ${selected.label}` : ''}
         </div>
       )}
