@@ -6,6 +6,8 @@ import * as THREE from 'three';
 import { GroundPlane } from './render/GroundPlane';
 import { ImportMapDialog } from './ui/ImportMapDialog';
 import { Toolbar, type ToolId } from './ui/Toolbar';
+import { SelectionBridge, type SelectedOsm } from './tools/SelectionBridge';
+import { CommandStack, DeleteOsmCommand } from './state/commandStack';
 import { StatusChip } from './ui/StatusChip';
 import { EmptyState } from './ui/EmptyState';
 import { ScenePanel, type OsmQuality } from './ui/ScenePanel';
@@ -237,6 +239,10 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [osm, setOsm] = useState<OsmState | null>(null);
   const [tool, setTool] = useState<ToolId>('select');
+  const [selected, setSelected] = useState<SelectedOsm | null>(null);
+  const [undoTick, setUndoTick] = useState(0);
+  const cmdStack = useRef(new CommandStack());
+  useEffect(() => cmdStack.current.subscribe(() => setUndoTick((n) => n + 1)), []);
   const [hour, setHour] = useState(14);
   const [sceneOpen, setSceneOpen] = useState(false);
   const [quality, setQuality] = useState<OsmQuality>('med');
@@ -308,6 +314,8 @@ export default function App() {
           bbox,
         });
         setDialogOpen(false);
+        setSelected(null);
+        cmdStack.current.clear();
         setFacadeNightFactor(hour);
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') return;
@@ -328,6 +336,45 @@ export default function App() {
   const handleRefresh = useCallback(() => {
     if (lastBbox.current) handleImport(lastBbox.current);
   }, [handleImport]);
+
+  const performDelete = useCallback((sel: SelectedOsm) => {
+    const targets: THREE.Object3D[] = [sel.object];
+    cmdStack.current.push(new DeleteOsmCommand(targets, sel.kind));
+    setSelected(null);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      const tag = (ev.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (ev.key === 'Escape') {
+        setSelected(null);
+        return;
+      }
+      if (ev.key === 'v' || ev.key === 'V') {
+        setTool('select');
+        return;
+      }
+      if (ev.key === 'x' || ev.key === 'X') {
+        setTool('delete');
+        return;
+      }
+      if ((ev.key === 'z' || ev.key === 'Z') && (ev.metaKey || ev.ctrlKey)) {
+        ev.preventDefault();
+        if (ev.shiftKey) cmdStack.current.redo();
+        else cmdStack.current.undo();
+        return;
+      }
+      if (ev.key === 'Delete' || ev.key === 'Backspace') {
+        if (selected) {
+          ev.preventDefault();
+          performDelete(selected);
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selected, performDelete]);
 
   useEffect(() => {
     if (!osm) return;
@@ -388,7 +435,14 @@ export default function App() {
         />
         <CameraFit target={fitTarget} fitKey={fitKey} />
         <CameraYawReporter onYaw={onYaw} />
-        <PickBridge enabled={!!osm && tool === 'select'} onHover={handleHover} />
+        <PickBridge enabled={!!osm && (tool === 'select' || tool === 'delete')} onHover={handleHover} />
+        <SelectionBridge
+          tool={tool}
+          enabled={!!osm && (tool === 'select' || tool === 'delete')}
+          selected={selected}
+          onSelect={setSelected}
+          onDeleteClick={performDelete}
+        />
       </Canvas>
 
       <div style={hud.top}>
@@ -443,8 +497,13 @@ export default function App() {
       <HoverHud info={hover.info} x={hover.x} y={hover.y} />
 
       {osm && (
-        <div style={hud.undo} title="Undo stack — available when brushes land">
-          \u2304 0
+        <div
+          key={undoTick}
+          style={hud.undo}
+          title={cmdStack.current.lastLabel ? `Undo: ${cmdStack.current.lastLabel} (Cmd+Z)` : 'Nothing to undo'}
+        >
+          \u2304 {cmdStack.current.undoCount}
+          {selected ? ` \u00b7 ${selected.label}` : ''}
         </div>
       )}
 
