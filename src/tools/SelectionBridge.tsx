@@ -4,11 +4,9 @@ import * as THREE from 'three';
 import type { ToolId } from '../ui/Toolbar';
 
 export interface SelectedOsm {
-  /** Primary object (group for buildings, mesh for roads). */
   object: THREE.Object3D;
   kind: string;
   label: string;
-  /** All objects in current selection (multi-select). */
   objects: THREE.Object3D[];
 }
 
@@ -28,7 +26,6 @@ function isPickableOsm(obj: THREE.Object3D): boolean {
   return true;
 }
 
-/** Walk up to the selectable OSM root (building Group or road Mesh). */
 function findOsmRoot(obj: THREE.Object3D | null): THREE.Object3D | null {
   let cur: THREE.Object3D | null = obj;
   while (cur) {
@@ -58,63 +55,48 @@ function labelOf(obj: THREE.Object3D): string {
   return tags.name ?? kind;
 }
 
-/** Primary tag key used for same-type multi-select. */
 function matchKey(obj: THREE.Object3D): string {
   const tags = (obj.userData?.osmTags ?? {}) as Record<string, string>;
   const kind = String(obj.userData?.kind ?? '');
-  if (kind === 'building') {
-    const b = tags.building ?? 'yes';
-    return `building:${b}`;
-  }
-  if (kind === 'road') {
-    return `highway:${tags.highway ?? 'road'}`;
-  }
+  if (kind === 'building') return `building:${tags.building ?? 'yes'}`;
+  if (kind === 'road') return `highway:${tags.highway ?? 'road'}`;
   return `${kind}:${tags.name ?? ''}`;
 }
 
 function clearHighlights(scene: THREE.Scene) {
   scene.traverse((obj) => {
     if (!(obj instanceof THREE.Mesh)) return;
-    const mat = obj.material as THREE.MeshStandardMaterial | THREE.MeshStandardMaterial[];
-    const apply = (m: THREE.MeshStandardMaterial) => {
-      if (m.userData?.__selBoost) {
-        m.emissive.copy(m.userData.__selPrevEmissive as THREE.Color);
-        m.emissiveIntensity = m.userData.__selPrevIntensity as number;
-        delete m.userData.__selBoost;
-        delete m.userData.__selPrevEmissive;
-        delete m.userData.__selPrevIntensity;
-        m.needsUpdate = true;
-      }
-    };
-    if (Array.isArray(mat)) mat.forEach(apply);
-    else if (mat) apply(mat);
+    const orig = obj.userData.__selMatOrig as THREE.Material | THREE.Material[] | undefined;
+    if (!orig) return;
+    const cur = obj.material;
+    if (Array.isArray(cur)) cur.forEach((m) => m.dispose());
+    else (cur as THREE.Material)?.dispose?.();
+    obj.material = orig;
+    delete obj.userData.__selMatOrig;
   });
 }
 
 function boostObject(root: THREE.Object3D) {
   root.traverse((obj) => {
     if (!(obj instanceof THREE.Mesh)) return;
-    const mat = obj.material as THREE.MeshStandardMaterial | THREE.MeshStandardMaterial[];
-    const boost = (m: THREE.MeshStandardMaterial) => {
-      if (!m.isMeshStandardMaterial) return;
-      if (m.userData?.__selBoost) return;
-      m.userData.__selPrevEmissive = m.emissive.clone();
-      m.userData.__selPrevIntensity = m.emissiveIntensity;
-      m.userData.__selBoost = true;
-      m.emissive.set('#4a9eff');
-      m.emissiveIntensity = Math.max(m.emissiveIntensity, 0.35);
-      m.needsUpdate = true;
+    if (obj.userData.__selMatOrig) return;
+    const mat = obj.material as THREE.Material | THREE.Material[];
+    const cloneOne = (m: THREE.Material): THREE.Material => {
+      const c = m.clone();
+      if ((c as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
+        const s = c as THREE.MeshStandardMaterial;
+        s.emissive = new THREE.Color('#4a9eff');
+        s.emissiveIntensity = 0.45;
+        s.needsUpdate = true;
+      }
+      return c;
     };
-    if (Array.isArray(mat)) mat.forEach(boost);
-    else if (mat) boost(mat);
+    obj.userData.__selMatOrig = mat;
+    if (Array.isArray(mat)) obj.material = mat.map(cloneOne);
+    else obj.material = cloneOne(mat);
   });
 }
 
-/**
- * Click = select exact object under cursor (nearest pickable).
- * Double-click = select all with same primary OSM tag.
- * Delete tool = remove clicked / selection (building group includes roof).
- */
 export function SelectionBridge({ tool, enabled, selected, onSelect, onDeleteClick }: Props) {
   const { camera, scene, gl } = useThree();
   const raycaster = useMemo(() => new THREE.Raycaster(), []);
@@ -146,24 +128,22 @@ export function SelectionBridge({ tool, enabled, selected, onSelect, onDeleteCli
       const osmGroup = scene.getObjectByName('OsmContextLayer');
       const roots = osmGroup ? [osmGroup] : scene.children;
       const hits = raycaster.intersectObjects(roots, true);
-      let bestRoad: { obj: THREE.Object3D; dist: number } | null = null;
+      let bestRoad: THREE.Object3D | null = null;
       for (const hit of hits) {
         if (!hit.object.visible) continue;
         const root = findOsmRoot(hit.object);
         if (!root || !root.visible || root.userData.deleted) continue;
-        // Prefer buildings over thin road geometry when both are hit
         if (root.userData.kind === 'building') return root;
-        if (!bestRoad) bestRoad = { obj: root, dist: hit.distance };
+        if (!bestRoad) bestRoad = root;
       }
-      return bestRoad?.obj ?? null;
+      return bestRoad;
     };
 
     const collectSameTag = (seed: THREE.Object3D): THREE.Object3D[] => {
       const key = matchKey(seed);
       const out: THREE.Object3D[] = [];
       const osmGroup = scene.getObjectByName('OsmContextLayer');
-      const root = osmGroup ?? scene;
-      root.traverse((obj) => {
+      (osmGroup ?? scene).traverse((obj) => {
         if (!isPickableOsm(obj)) return;
         if (matchKey(obj) === key) out.push(obj);
       });
@@ -199,6 +179,8 @@ export function SelectionBridge({ tool, enabled, selected, onSelect, onDeleteCli
         return;
       }
 
+      if (t !== 'select') return;
+
       if (!hit) {
         lastClick.current = null;
         onSelectRef.current(null);
@@ -207,10 +189,7 @@ export function SelectionBridge({ tool, enabled, selected, onSelect, onDeleteCli
 
       const key = matchKey(hit);
       const isDouble =
-        lastClick.current &&
-        lastClick.current.key === key &&
-        now - lastClick.current.t < 350;
-
+        lastClick.current && lastClick.current.key === key && now - lastClick.current.t < 350;
       lastClick.current = { t: now, key };
 
       if (isDouble) {
@@ -218,7 +197,7 @@ export function SelectionBridge({ tool, enabled, selected, onSelect, onDeleteCli
         onSelectRef.current({
           object: hit,
           kind: String(hit.userData.kind),
-          label: `${labelOf(hit)} ×${all.length}`,
+          label: `${labelOf(hit)} \u00d7${all.length}`,
           objects: all,
         });
       } else {
