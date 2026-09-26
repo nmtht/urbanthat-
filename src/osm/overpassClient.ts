@@ -12,7 +12,14 @@ export interface OverpassElement {
   lon?: number;
   tags?: Record<string, string>;
   geometry?: OverpassNodeGeom[];
-  members?: Array<{ type: string; ref: number; role: string }>;
+  members?: Array<{
+    type: string;
+    ref: number;
+    role: string;
+    geometry?: OverpassNodeGeom[];
+    lat?: number;
+    lon?: number;
+  }>;
 }
 
 export interface OverpassResponse {
@@ -26,7 +33,7 @@ const ENDPOINTS = [
   'https://overpass-api.openstreetmap.fr/api/interpreter',
 ];
 
-const DEFAULT_TIMEOUT_MS = 35_000;
+const DEFAULT_TIMEOUT_MS = 40_000;
 
 function padBbox(bbox: BBox, padDeg = 0.0015): BBox {
   return {
@@ -40,10 +47,8 @@ function padBbox(bbox: BBox, padDeg = 0.0015): BBox {
 function buildQuery(bbox: BBox): string {
   const b = padBbox(bbox);
   const bb = `${b.south},${b.west},${b.north},${b.east}`;
-  // IMPORTANT: only `out geom` — `out body` alone yields ways without coordinates
-  // (trees as nodes still get lat/lon via out geom).
   return `
-[out:json][timeout:30];
+[out:json][timeout:40];
 (
   way["building"](${bb});
   way["highway"](${bb});
@@ -65,6 +70,11 @@ function buildQuery(bbox: BBox): string {
   way["natural"="scrub"](${bb});
   way["natural"="grassland"](${bb});
   node["natural"="tree"](${bb});
+  relation["type"="multipolygon"]["natural"="water"](${bb});
+  relation["type"="multipolygon"]["waterway"="riverbank"](${bb});
+  relation["type"="multipolygon"]["landuse"="reservoir"](${bb});
+  relation["type"="multipolygon"]["leisure"="park"](${bb});
+  relation["type"="multipolygon"]["landuse"="forest"](${bb});
 );
 out geom;
 `.trim();
