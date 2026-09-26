@@ -5,7 +5,7 @@ import 'leaflet/dist/leaflet.css';
 import type { BBox } from '../domain/SceneOrigin';
 import { approxBboxSizeM } from '../domain/SceneOrigin';
 
-/** Max bbox edge ~5 km to keep Overpass and mesh count reasonable. */
+/** Max bbox edge ~5 km. */
 const MAX_EDGE_M = 5000;
 
 export interface ImportMapDialogProps {
@@ -104,7 +104,7 @@ export function ImportMapDialog({
         <div style={styles.head}>
           <span style={styles.title}>Import map fragment</span>
           <button type="button" style={styles.close} onClick={onClose} disabled={!!loading}>
-            \u00d7
+            {'\u00d7'}
           </button>
         </div>
         <div ref={mapDiv} style={styles.map} />
@@ -112,7 +112,7 @@ export function ImportMapDialog({
           <span style={styles.size}>
             {sizeLabel}
             {tooLarge && (
-              <span style={styles.warn}> \u2014 too large, zoom in (max ~5 km)</span>
+              <span style={styles.warn}> {'\u2014'} too large, zoom in (max ~5 km)</span>
             )}
           </span>
           {error && <div style={styles.err}>{error}</div>}
