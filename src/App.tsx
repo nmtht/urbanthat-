@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
-import { OrbitControls } from '@react-three/drei';
+import { OrbitControls, Sky, Stars } from '@react-three/drei';
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { GroundPlane } from './render/GroundPlane';
@@ -17,6 +17,8 @@ import {
   disposeOsmContextLayer,
 } from './osm/osmContextLayer';
 
+type DayMode = 'day' | 'dusk' | 'night';
+
 interface OsmState {
   origin: SceneOrigin;
   group: THREE.Group;
@@ -24,6 +26,7 @@ interface OsmState {
   roadCount: number;
   waterCount: number;
   greenCount: number;
+  treeCount: number;
   bbox: BBox;
 }
 
@@ -49,12 +52,44 @@ function CameraFit({
   return null;
 }
 
+function Environment({ mode }: { mode: DayMode }) {
+  if (mode === 'night') {
+    return (
+      <>
+        <color attach="background" args={['#0b0e14']} />
+        <ambientLight intensity={0.25} />
+        <directionalLight position={[40, 80, 20]} intensity={0.15} color="#a8b4c8" />
+        <Stars radius={400} depth={80} count={4000} factor={3} saturation={0} fade speed={0.4} />
+      </>
+    );
+  }
+  if (mode === 'dusk') {
+    return (
+      <>
+        <Sky sunPosition={[-20, 2, -40]} turbidity={8} rayleigh={2.5} mieCoefficient={0.01} mieDirectionalG={0.8} />
+        <ambientLight intensity={0.35} color="#ffd0b0" />
+        <directionalLight position={[-40, 15, -30]} intensity={0.9} color="#ff9a5c" />
+        <hemisphereLight args={['#ffb070', '#2a2030', 0.4]} />
+      </>
+    );
+  }
+  return (
+    <>
+      <Sky sunPosition={[80, 40, 40]} turbidity={4} rayleigh={1.2} mieCoefficient={0.005} mieDirectionalG={0.8} />
+      <ambientLight intensity={0.45} />
+      <directionalLight position={[120, 180, 80]} intensity={1.15} color="#fff5e6" />
+      <hemisphereLight args={['#c8daf0', '#3a3a38', 0.35]} />
+    </>
+  );
+}
+
 export default function App() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [osm, setOsm] = useState<OsmState | null>(null);
   const [status, setStatus] = useState('Urban That \u00b7 import a map fragment to begin');
+  const [dayMode, setDayMode] = useState<DayMode>('day');
   const abortRef = useRef<AbortController | null>(null);
 
   const clearOsm = useCallback(() => {
@@ -71,27 +106,27 @@ export default function App() {
       abortRef.current = ac;
       setLoading(true);
       setError(null);
-      setStatus('Fetching OSM\u2026');
+      setStatus('Fetching OSM...');
 
       try {
         const data = await fetchOsmFragment(bbox, { signal: ac.signal });
         const center = bboxCenter(bbox);
         const origin = createSceneOrigin(center.lat, center.lon);
-        const { group, buildingCount, roadCount, waterCount, greenCount } =
-          buildOsmContextLayer(data, origin);
+        const built = buildOsmContextLayer(data, origin, bbox);
 
         clearOsm();
         setOsm({
           origin,
-          group,
-          buildingCount,
-          roadCount,
-          waterCount,
-          greenCount,
+          group: built.group,
+          buildingCount: built.buildingCount,
+          roadCount: built.roadCount,
+          waterCount: built.waterCount,
+          greenCount: built.greenCount,
+          treeCount: built.treeCount,
           bbox,
         });
         setStatus(
-          `OSM \u00b7 ${buildingCount} bld \u00b7 ${roadCount} roads \u00b7 ${waterCount} water \u00b7 ${greenCount} green \u00b7 ${center.lat.toFixed(4)}, ${center.lon.toFixed(4)}`
+          `OSM \u00b7 ${built.buildingCount} bld \u00b7 ${built.roadCount} roads \u00b7 ${built.waterCount} water \u00b7 ${built.greenCount} green \u00b7 ${built.treeCount} trees`
         );
         setDialogOpen(false);
       } catch (err) {
@@ -127,6 +162,10 @@ export default function App() {
       })()
     : null;
 
+  const cycleDay = () => {
+    setDayMode((m) => (m === 'day' ? 'dusk' : m === 'dusk' ? 'night' : 'day'));
+  };
+
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
       <Canvas
@@ -135,14 +174,12 @@ export default function App() {
         style={{ background: '#1c1c1e' }}
         onCreated={({ gl }) => {
           gl.setClearColor('#1c1c1e');
+          gl.toneMapping = THREE.ACESFilmicToneMapping;
+          gl.toneMappingExposure = 1.05;
         }}
       >
-        <color attach="background" args={['#1c1c1e']} />
-        <ambientLight intensity={0.55} />
-        <directionalLight position={[120, 180, 80]} intensity={1.1} />
-        <Suspense fallback={null}>
-          <GroundPlane size={2000} />
-        </Suspense>
+        <Environment mode={dayMode} />
+        <Suspense fallback={null}>{!osm && <GroundPlane size={2000} />}</Suspense>
         <group>{osm && <primitive object={osm.group} />}</group>
         <OrbitControls
           makeDefault
@@ -153,12 +190,14 @@ export default function App() {
           maxPolarAngle={Math.PI / 2.05}
         />
         <CameraFit target={fitTarget} />
-        <gridHelper args={[2000, 40, '#2c2c2e', '#252528']} position={[0, 0.01, 0]} />
       </Canvas>
 
       <div style={hud.bar}>
         <span style={hud.status}>{status}</span>
         <div style={hud.actions}>
+          <button type="button" style={hud.btn} onClick={cycleDay} title="Day / Dusk / Night">
+            {dayMode === 'day' ? 'Day' : dayMode === 'dusk' ? 'Dusk' : 'Night'}
+          </button>
           {osm && (
             <button type="button" style={hud.btn} onClick={handleRefresh} disabled={loading}>
               Refresh OSM
@@ -204,9 +243,10 @@ const hud: Record<string, CSSProperties> = {
       '-apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif',
   },
   status: {
-    color: 'rgba(255,255,255,0.7)',
+    color: 'rgba(255,255,255,0.85)',
     fontSize: 13,
     letterSpacing: '-0.01em',
+    textShadow: '0 1px 3px rgba(0,0,0,0.5)',
   },
   actions: {
     display: 'flex',
