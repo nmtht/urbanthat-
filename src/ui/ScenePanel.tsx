@@ -164,8 +164,8 @@ const s: Record<string, CSSProperties> = {
     cursor: 'pointer',
   },
   segOn: {
-    background: 'rgba(10,132,255,0.95)',
-    color: '#fff',
+    background: 'rgba(72,72,74,0.98)',
+    color: '#f5f5f7',
     fontWeight: 600,
   },
   check: {
