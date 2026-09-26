@@ -196,9 +196,30 @@ export function buildOsmContextLayer(
     metalness: 0,
     depthWrite: false,
   });
-  const asphaltMat = new THREE.MeshStandardMaterial({ color: '#2c2c2e', roughness: 0.85, metalness: 0.05 });
-  const sidewalkMat = new THREE.MeshStandardMaterial({ color: '#5a5a58', roughness: 0.9, metalness: 0 });
-  const footMat = new THREE.MeshStandardMaterial({ color: '#4a4844', roughness: 0.9, metalness: 0 });
+  const asphaltMat = new THREE.MeshStandardMaterial({
+    color: '#2c2c2e',
+    roughness: 0.85,
+    metalness: 0.05,
+    polygonOffset: true,
+    polygonOffsetFactor: 1,
+    polygonOffsetUnits: 1,
+  });
+  const sidewalkMat = new THREE.MeshStandardMaterial({
+    color: '#5a5a58',
+    roughness: 0.9,
+    metalness: 0,
+    polygonOffset: true,
+    polygonOffsetFactor: 2,
+    polygonOffsetUnits: 2,
+  });
+  const footMat = new THREE.MeshStandardMaterial({
+    color: '#4a4844',
+    roughness: 0.9,
+    metalness: 0,
+    polygonOffset: true,
+    polygonOffsetFactor: 2,
+    polygonOffsetUnits: 2,
+  });
 
   let buildingCount = 0;
   let roadCount = 0;
@@ -270,7 +291,7 @@ export function buildOsmContextLayer(
         );
         const carClipped = clipPolygonToRect(carriage, clipRect);
         if (carClipped.length >= 3) {
-          const mesh = flatMeshFromRing(carClipped, 0.04, isFootOnly(tags.highway) ? footMat : asphaltMat);
+          const mesh = flatMeshFromRing(carClipped, 0.05, isFootOnly(tags.highway) ? footMat : asphaltMat);
           if (mesh) {
             mesh.userData.kind = 'road';
             mesh.userData.osmTags = tags;
@@ -282,7 +303,7 @@ export function buildOsmContextLayer(
         if (sidewalkOuter) {
           const sw = clipPolygonToRect(sidewalkOuter, clipRect);
           if (sw.length >= 3) {
-            const mesh = flatMeshFromRing(sw, 0.025, sidewalkMat);
+            const mesh = flatMeshFromRing(sw, 0.02, sidewalkMat);
             if (mesh) group.add(mesh);
           }
         }
