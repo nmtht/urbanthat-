@@ -22,6 +22,8 @@ interface OsmState {
   group: THREE.Group;
   buildingCount: number;
   roadCount: number;
+  waterCount: number;
+  greenCount: number;
   bbox: BBox;
 }
 
@@ -75,12 +77,21 @@ export default function App() {
         const data = await fetchOsmFragment(bbox, { signal: ac.signal });
         const center = bboxCenter(bbox);
         const origin = createSceneOrigin(center.lat, center.lon);
-        const { group, buildingCount, roadCount } = buildOsmContextLayer(data, origin);
+        const { group, buildingCount, roadCount, waterCount, greenCount } =
+          buildOsmContextLayer(data, origin);
 
         clearOsm();
-        setOsm({ origin, group, buildingCount, roadCount, bbox });
+        setOsm({
+          origin,
+          group,
+          buildingCount,
+          roadCount,
+          waterCount,
+          greenCount,
+          bbox,
+        });
         setStatus(
-          `OSM \u00b7 ${buildingCount} buildings \u00b7 ${roadCount} roads \u00b7 origin ${center.lat.toFixed(4)}, ${center.lon.toFixed(4)}`
+          `OSM \u00b7 ${buildingCount} bld \u00b7 ${roadCount} roads \u00b7 ${waterCount} water \u00b7 ${greenCount} green \u00b7 ${center.lat.toFixed(4)}, ${center.lon.toFixed(4)}`
         );
         setDialogOpen(false);
       } catch (err) {
