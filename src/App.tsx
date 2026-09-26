@@ -5,6 +5,13 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import * as THREE from 'three';
 import { GroundPlane } from './render/GroundPlane';
 import { ImportMapDialog } from './ui/ImportMapDialog';
+import { Toolbar, type ToolId } from './ui/Toolbar';
+import { StatusChip } from './ui/StatusChip';
+import { EmptyState } from './ui/EmptyState';
+import { ScenePanel, type OsmQuality } from './ui/ScenePanel';
+import { Minimap } from './ui/Minimap';
+import { HoverHud, type HoverInfo } from './ui/HoverHud';
+import { NorthArrow } from './ui/NorthArrow';
 import {
   createSceneOrigin,
   bboxCenter,
@@ -38,11 +45,7 @@ function sunFromHour(hour: number): THREE.Vector3 {
   return new THREE.Vector3(x, y, z).normalize().multiplyScalar(100);
 }
 
-function CameraFit({
-  target,
-}: {
-  target: { x: number; z: number; radius: number } | null;
-}) {
+function CameraFit({ target }: { target: { x: number; z: number; radius: number } | null }) {
   const { camera, controls } = useThree();
   useEffect(() => {
     if (!target) return;
@@ -60,7 +63,6 @@ function CameraFit({
   return null;
 }
 
-/** Sky that fills the view: atmospheric dome + fog — not a finite box. */
 function Atmosphere({ hour }: { hour: number }) {
   const { scene, camera, gl } = useThree();
   const sun = useMemo(() => sunFromHour(hour), [hour]);
@@ -72,7 +74,6 @@ function Atmosphere({ hour }: { hour: number }) {
     cam.near = 0.5;
     cam.far = 80_000;
     cam.updateProjectionMatrix();
-
     if (isNight) {
       scene.background = new THREE.Color('#070a10');
       scene.fog = new THREE.FogExp2(0x070a10, 0.00012);
@@ -83,7 +84,6 @@ function Atmosphere({ hour }: { hour: number }) {
       scene.fog = new THREE.FogExp2(horizon, elev < 28 ? 0.0001 : 0.00006);
       gl.setClearColor(horizon);
     }
-
     return () => {
       scene.fog = null;
       scene.background = null;
@@ -94,38 +94,83 @@ function Atmosphere({ hour }: { hour: number }) {
     return (
       <>
         <ambientLight intensity={0.2} />
-        <directionalLight
-          position={[sun.x, Math.max(Math.abs(sun.y), 30), sun.z]}
-          intensity={0.12}
-          color="#a8b4c8"
-        />
+        <directionalLight position={[sun.x, Math.max(Math.abs(sun.y), 30), sun.z]} intensity={0.12} color="#a8b4c8" />
         <Stars radius={600} depth={120} count={6000} factor={3.5} saturation={0} fade speed={0.3} />
       </>
     );
   }
-
   const dusk = elev < 28;
   return (
     <>
-      <Sky
-        distance={450_000}
-        sunPosition={[sun.x, sun.y, sun.z]}
-        turbidity={dusk ? 8 : 3.2}
-        rayleigh={dusk ? 2.4 : 1.0}
-        mieCoefficient={dusk ? 0.012 : 0.004}
-        mieDirectionalG={0.85}
-      />
+      <Sky distance={450_000} sunPosition={[sun.x, sun.y, sun.z]} turbidity={dusk ? 8 : 3.2} rayleigh={dusk ? 2.4 : 1.0} mieCoefficient={dusk ? 0.012 : 0.004} mieDirectionalG={0.85} />
       <ambientLight intensity={dusk ? 0.32 : 0.5} color={dusk ? '#ffd0b0' : '#ffffff'} />
-      <directionalLight
-        position={[sun.x, sun.y, sun.z]}
-        intensity={dusk ? 0.9 : 1.25}
-        color={dusk ? '#ff9a5c' : '#fff5e6'}
-      />
-      <hemisphereLight
-        args={[dusk ? '#ffb070' : '#d0e4f8', '#3c3c38', dusk ? 0.45 : 0.4]}
-      />
+      <directionalLight position={[sun.x, sun.y, sun.z]} intensity={dusk ? 0.9 : 1.25} color={dusk ? '#ff9a5c' : '#fff5e6'} />
+      <hemisphereLight args={[dusk ? '#ffb070' : '#d0e4f8', '#3c3c38', dusk ? 0.45 : 0.4]} />
     </>
   );
+}
+
+function labelFromTags(kind: string, tags: Record<string, string>): HoverInfo {
+  if (kind === 'building') {
+    const type = tags.building && tags.building !== 'yes' ? tags.building : 'building';
+    return {
+      kind: 'building',
+      label: tags.name ?? type,
+      detail: tags.name ? type : tags['building:levels'] ? `${tags['building:levels']} levels` : undefined,
+    };
+  }
+  if (kind === 'road') {
+    return {
+      kind: 'road',
+      label: tags.name ?? tags.highway ?? 'road',
+      detail: tags.name ? tags.highway : tags.lanes ? `${tags.lanes} lanes` : undefined,
+    };
+  }
+  return { kind: 'other', label: kind };
+}
+
+function PickBridge({
+  enabled,
+  onHover,
+}: {
+  enabled: boolean;
+  onHover: (info: HoverInfo | null, x: number, y: number) => void;
+}) {
+  const { camera, scene, gl } = useThree();
+  const raycaster = useMemo(() => new THREE.Raycaster(), []);
+  const pointer = useMemo(() => new THREE.Vector2(), []);
+
+  useEffect(() => {
+    if (!enabled) return;
+    const el = gl.domElement;
+    const onMove = (ev: PointerEvent) => {
+      const rect = el.getBoundingClientRect();
+      pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      const hits = raycaster.intersectObjects(scene.children, true);
+      for (const hit of hits) {
+        let obj: THREE.Object3D | null = hit.object;
+        while (obj) {
+          if (obj.userData?.kind && obj.userData?.osmTags) {
+            onHover(labelFromTags(obj.userData.kind, obj.userData.osmTags), ev.clientX, ev.clientY);
+            return;
+          }
+          obj = obj.parent;
+        }
+      }
+      onHover(null, ev.clientX, ev.clientY);
+    };
+    const onLeave = () => onHover(null, 0, 0);
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerleave', onLeave);
+    return () => {
+      el.removeEventListener('pointermove', onMove);
+      el.removeEventListener('pointerleave', onLeave);
+    };
+  }, [enabled, camera, scene, gl, raycaster, pointer, onHover]);
+
+  return null;
 }
 
 export default function App() {
@@ -133,9 +178,21 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [osm, setOsm] = useState<OsmState | null>(null);
-  const [status, setStatus] = useState('Urban That \u00b7 import a map fragment to begin');
+  const [tool, setTool] = useState<ToolId>('select');
   const [hour, setHour] = useState(14);
+  const [sceneOpen, setSceneOpen] = useState(false);
+  const [quality, setQuality] = useState<OsmQuality>('med');
+  const [showTrees, setShowTrees] = useState(true);
+  const [showGrid, setShowGrid] = useState(false);
+  const [showNorth, setShowNorth] = useState(true);
+  const [units, setUnits] = useState<'m' | 'ft'>('m');
+  const [hover, setHover] = useState<{ info: HoverInfo | null; x: number; y: number }>({
+    info: null,
+    x: 0,
+    y: 0,
+  });
   const abortRef = useRef<AbortController | null>(null);
+  const lastBbox = useRef<BBox | null>(null);
 
   const clearOsm = useCallback(() => {
     setOsm((prev) => {
@@ -151,16 +208,13 @@ export default function App() {
       abortRef.current = ac;
       setLoading(true);
       setError(null);
-      setStatus('Fetching OSM...');
+      lastBbox.current = bbox;
 
       try {
         const data = await fetchOsmFragment(bbox, { signal: ac.signal });
-        const ways = data.elements.filter((e) => e.type === 'way');
-        const waysGeom = ways.filter((e) => e.geometry && e.geometry.length >= 2);
-
         const center = bboxCenter(bbox);
         const origin = createSceneOrigin(center.lat, center.lon);
-        const built = buildOsmContextLayer(data, origin, bbox);
+        const built = buildOsmContextLayer(data, origin, bbox, { quality, showTrees });
 
         clearOsm();
         setOsm({
@@ -173,9 +227,6 @@ export default function App() {
           treeCount: built.treeCount,
           bbox,
         });
-        setStatus(
-          `OSM \u00b7 ${built.buildingCount} bld \u00b7 ${built.roadCount} roads \u00b7 ${built.waterCount} water \u00b7 ${built.greenCount} green \u00b7 ${built.treeCount} trees \u00b7 geom ${waysGeom.length}/${ways.length}`
-        );
         setDialogOpen(false);
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') return;
@@ -186,17 +237,23 @@ export default function App() {
               ? err.message
               : 'Import failed';
         setError(msg);
-        setStatus('Import failed');
       } finally {
         setLoading(false);
       }
     },
-    [clearOsm]
+    [clearOsm, quality, showTrees]
   );
 
   const handleRefresh = useCallback(() => {
-    if (osm?.bbox) handleImport(osm.bbox);
-  }, [osm, handleImport]);
+    if (lastBbox.current) handleImport(lastBbox.current);
+  }, [handleImport]);
+
+  useEffect(() => {
+    if (!osm) return;
+    osm.group.traverse((obj) => {
+      if (obj.userData?.kind === 'tree') obj.visible = showTrees;
+    });
+  }, [showTrees, osm]);
 
   const fitTarget = osm
     ? (() => {
@@ -210,7 +267,10 @@ export default function App() {
       })()
     : null;
 
-  const hourLabel = `${String(Math.floor(hour)).padStart(2, '0')}:${hour % 1 >= 0.5 ? '30' : '00'}`;
+  const openImport = () => {
+    setError(null);
+    setDialogOpen(true);
+  };
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
@@ -227,51 +287,69 @@ export default function App() {
         <Atmosphere hour={hour} />
         <Suspense fallback={null}>{!osm && <GroundPlane size={400} />}</Suspense>
         <group>{osm && <primitive object={osm.group} />}</group>
-        <OrbitControls
-          makeDefault
-          enableDamping
-          dampingFactor={0.08}
-          minDistance={10}
-          maxDistance={12_000}
-          maxPolarAngle={Math.PI / 2.02}
-        />
+        {showGrid && <gridHelper args={[2000, 40, '#3a3a3c', '#2c2c2e']} position={[0, 0.02, 0]} />}
+        <OrbitControls makeDefault enableDamping dampingFactor={0.08} minDistance={10} maxDistance={12_000} maxPolarAngle={Math.PI / 2.02} />
         <CameraFit target={fitTarget} />
+        <PickBridge enabled={!!osm && tool === 'select'} onHover={(info, x, y) => setHover({ info, x, y })} />
       </Canvas>
 
-      <div style={hud.bar}>
-        <span style={hud.status}>{status}</span>
-        <div style={hud.actions}>
-          <div style={hud.timeWrap}>
-            <span style={hud.timeLabel}>{hourLabel}</span>
-            <input
-              type="range"
-              min={0}
-              max={24}
-              step={0.25}
-              value={hour}
-              onChange={(e) => setHour(parseFloat(e.target.value))}
-              style={hud.slider}
-              title="Time of day"
-            />
-          </div>
+      <div style={hud.top}>
+        <StatusChip
+          counts={
+            osm
+              ? {
+                  buildingCount: osm.buildingCount,
+                  roadCount: osm.roadCount,
+                  waterCount: osm.waterCount,
+                  greenCount: osm.greenCount,
+                  treeCount: osm.treeCount,
+                }
+              : null
+          }
+          loading={loading}
+          message="Urban That"
+        />
+        <div style={hud.topRight}>
           {osm && (
             <button type="button" style={hud.btn} onClick={handleRefresh} disabled={loading}>
-              Refresh OSM
+              Refresh
             </button>
           )}
-          <button
-            type="button"
-            style={hud.btnPrimary}
-            onClick={() => {
-              setError(null);
-              setDialogOpen(true);
-            }}
-            disabled={loading}
-          >
-            Import map
+          <button type="button" style={hud.btn} onClick={() => setSceneOpen((v) => !v)} title="Scene settings">
+            Scene
           </button>
         </div>
       </div>
+
+      <Toolbar active={tool} onChange={setTool} onImport={openImport} disabled={loading} />
+      {!osm && !loading && !dialogOpen && <EmptyState onImport={openImport} />}
+
+      <ScenePanel
+        open={sceneOpen}
+        onClose={() => setSceneOpen(false)}
+        hour={hour}
+        onHour={setHour}
+        quality={quality}
+        onQuality={setQuality}
+        showTrees={showTrees}
+        onShowTrees={setShowTrees}
+        showGrid={showGrid}
+        onShowGrid={setShowGrid}
+        showNorth={showNorth}
+        onShowNorth={setShowNorth}
+        units={units}
+        onUnits={setUnits}
+      />
+
+      <Minimap bbox={osm?.bbox ?? null} visible={!!osm} />
+      <NorthArrow visible={showNorth && !!osm} />
+      <HoverHud info={hover.info} x={hover.x} y={hover.y} />
+
+      {osm && (
+        <div style={hud.undo} title="Undo stack — available when brushes land">
+          \u2304 0
+        </div>
+      )}
 
       <ImportMapDialog
         open={dialogOpen}
@@ -285,7 +363,7 @@ export default function App() {
 }
 
 const hud: Record<string, CSSProperties> = {
-  bar: {
+  top: {
     position: 'absolute',
     top: 0,
     left: 0,
@@ -293,44 +371,11 @@ const hud: Record<string, CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: '12px 16px',
+    padding: '12px 16px 12px 80px',
     pointerEvents: 'none',
-    fontFamily:
-      '-apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif',
+    zIndex: 18,
   },
-  status: {
-    color: 'rgba(255,255,255,0.85)',
-    fontSize: 13,
-    letterSpacing: '-0.01em',
-    textShadow: '0 1px 3px rgba(0,0,0,0.5)',
-    maxWidth: '45%',
-  },
-  actions: {
-    display: 'flex',
-    gap: 10,
-    alignItems: 'center',
-    pointerEvents: 'auto',
-  },
-  timeWrap: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    background: 'rgba(58,58,60,0.9)',
-    borderRadius: 8,
-    padding: '4px 10px',
-    backdropFilter: 'blur(8px)',
-  },
-  timeLabel: {
-    color: '#f5f5f7',
-    fontSize: 12,
-    fontVariantNumeric: 'tabular-nums',
-    minWidth: 40,
-  },
-  slider: {
-    width: 120,
-    cursor: 'pointer',
-    accentColor: '#0a84ff',
-  },
+  topRight: { display: 'flex', gap: 8, pointerEvents: 'auto' },
   btn: {
     background: 'rgba(58,58,60,0.9)',
     color: '#f5f5f7',
@@ -340,15 +385,19 @@ const hud: Record<string, CSSProperties> = {
     fontSize: 13,
     cursor: 'pointer',
     backdropFilter: 'blur(8px)',
+    fontFamily: '-apple-system, BlinkMacSystemFont, system-ui, sans-serif',
   },
-  btnPrimary: {
-    background: 'rgba(10,132,255,0.95)',
-    color: '#fff',
-    border: 'none',
+  undo: {
+    position: 'absolute',
+    left: 16,
+    bottom: 16,
+    padding: '6px 10px',
     borderRadius: 8,
-    padding: '7px 14px',
-    fontSize: 13,
-    fontWeight: 600,
-    cursor: 'pointer',
+    background: 'rgba(44,44,46,0.6)',
+    color: 'rgba(255,255,255,0.45)',
+    fontSize: 12,
+    fontFamily: '-apple-system, system-ui, sans-serif',
+    pointerEvents: 'none',
+    zIndex: 18,
   },
 };
