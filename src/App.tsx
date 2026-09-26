@@ -9,7 +9,6 @@ import { Toolbar, type ToolId } from './ui/Toolbar';
 import { StatusChip } from './ui/StatusChip';
 import { EmptyState } from './ui/EmptyState';
 import { ScenePanel, type OsmQuality } from './ui/ScenePanel';
-import { Minimap } from './ui/Minimap';
 import { HoverHud, type HoverInfo } from './ui/HoverHud';
 import { NorthArrow } from './ui/NorthArrow';
 import {
@@ -23,7 +22,7 @@ import {
   buildOsmContextLayer,
   disposeOsmContextLayer,
 } from './osm/osmContextLayer';
-import { setFacadeNightFactor } from './render/buildingFacades';
+import { setFacadeNightFactor, clearFacadeCache } from './render/buildingFacades';
 
 interface OsmState {
   origin: SceneOrigin;
@@ -337,6 +336,15 @@ export default function App() {
     });
   }, [showTrees, osm]);
 
+  const qualityRef = useRef(quality);
+  useEffect(() => {
+    if (qualityRef.current === quality) return;
+    qualityRef.current = quality;
+    if (!lastBbox.current) return;
+    clearFacadeCache();
+    handleImport(lastBbox.current);
+  }, [quality, handleImport]);
+
   const fitKey = osm ? `${osm.bbox.south},${osm.bbox.west},${osm.buildingCount}` : null;
   const fitTarget = useMemo(() => {
     if (!osm) return null;
@@ -431,7 +439,6 @@ export default function App() {
         onUnits={setUnits}
       />
 
-      <Minimap bbox={osm?.bbox ?? null} visible={!!osm} />
       <NorthArrow visible={showNorth && !!osm} yawDeg={yawDeg} />
       <HoverHud info={hover.info} x={hover.x} y={hover.y} />
 
