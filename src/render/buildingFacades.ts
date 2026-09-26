@@ -256,6 +256,11 @@ totalEmissiveRadiance += vec3(1.0, 0.72, 0.35) * winMask * uNight * 1.4;
   return mat;
 }
 
+export function clearFacadeCache(): void {
+  wallMats.clear();
+  emissiveMats.length = 0;
+}
+
 export function setFacadeNightFactor(hour: number): void {
   let night = 0;
   if (hour < 5.5 || hour > 20.5) night = 1;
