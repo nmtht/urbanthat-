@@ -45,7 +45,13 @@ function sunFromHour(hour: number): THREE.Vector3 {
   return new THREE.Vector3(x, y, z).normalize().multiplyScalar(100);
 }
 
-function CameraFit({ target }: { target: { x: number; z: number; radius: number } | null }) {
+function CameraFit({
+  target,
+  fitKey,
+}: {
+  target: { x: number; z: number; radius: number } | null;
+  fitKey: string | null;
+}) {
   const { camera, controls } = useThree();
   useEffect(() => {
     if (!target) return;
@@ -59,7 +65,27 @@ function CameraFit({ target }: { target: { x: number; z: number; radius: number 
       c.target.set(target.x, 0, target.z);
       c.update();
     }
-  }, [target, camera, controls]);
+  }, [fitKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  return null;
+}
+
+function CameraYawReporter({ onYaw }: { onYaw: (deg: number) => void }) {
+  const { camera } = useThree();
+  const last = useRef<number>(9999);
+  useEffect(() => {
+    let raf = 0;
+    const tick = () => {
+      const e = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
+      const deg = (e.y * 180) / Math.PI;
+      if (Math.abs(deg - last.current) > 1.5) {
+        last.current = deg;
+        onYaw(deg);
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [camera, onYaw]);
   return null;
 }
 
@@ -139,36 +165,68 @@ function PickBridge({
   const { camera, scene, gl } = useThree();
   const raycaster = useMemo(() => new THREE.Raycaster(), []);
   const pointer = useMemo(() => new THREE.Vector2(), []);
+  const onHoverRef = useRef(onHover);
+  onHoverRef.current = onHover;
+  const lastKey = useRef<string>('');
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) {
+      onHoverRef.current(null, 0, 0);
+      lastKey.current = '';
+      return;
+    }
     const el = gl.domElement;
-    const onMove = (ev: PointerEvent) => {
+    let pending: number | null = null;
+    let lastEv: PointerEvent | null = null;
+
+    const resolve = () => {
+      pending = null;
+      const ev = lastEv;
+      if (!ev) return;
       const rect = el.getBoundingClientRect();
       pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(pointer, camera);
       const hits = raycaster.intersectObjects(scene.children, true);
+      let info: HoverInfo | null = null;
       for (const hit of hits) {
         let obj: THREE.Object3D | null = hit.object;
         while (obj) {
           if (obj.userData?.kind && obj.userData?.osmTags) {
-            onHover(labelFromTags(obj.userData.kind, obj.userData.osmTags), ev.clientX, ev.clientY);
-            return;
+            info = labelFromTags(obj.userData.kind, obj.userData.osmTags);
+            break;
           }
           obj = obj.parent;
         }
+        if (info) break;
       }
-      onHover(null, ev.clientX, ev.clientY);
+      const key = info
+        ? `${info.kind}:${info.label}:${Math.round(ev.clientX / 4)}:${Math.round(ev.clientY / 4)}`
+        : '';
+      if (key === lastKey.current) return;
+      lastKey.current = key;
+      onHoverRef.current(info, ev.clientX, ev.clientY);
     };
-    const onLeave = () => onHover(null, 0, 0);
+
+    const onMove = (ev: PointerEvent) => {
+      lastEv = ev;
+      if (pending != null) return;
+      pending = window.setTimeout(resolve, 32);
+    };
+    const onLeave = () => {
+      if (pending != null) window.clearTimeout(pending);
+      pending = null;
+      lastKey.current = '';
+      onHoverRef.current(null, 0, 0);
+    };
     el.addEventListener('pointermove', onMove);
     el.addEventListener('pointerleave', onLeave);
     return () => {
+      if (pending != null) window.clearTimeout(pending);
       el.removeEventListener('pointermove', onMove);
       el.removeEventListener('pointerleave', onLeave);
     };
-  }, [enabled, camera, scene, gl, raycaster, pointer, onHover]);
+  }, [enabled, camera, scene, gl, raycaster, pointer]);
 
   return null;
 }
@@ -191,6 +249,24 @@ export default function App() {
     x: 0,
     y: 0,
   });
+  const [yawDeg, setYawDeg] = useState(0);
+  const onYaw = useCallback((d: number) => setYawDeg(d), []);
+  const handleHover = useCallback((info: HoverInfo | null, x: number, y: number) => {
+    setHover((prev) => {
+      if (!info && !prev.info) return prev;
+      if (
+        info &&
+        prev.info &&
+        info.label === prev.info.label &&
+        info.kind === prev.info.kind &&
+        Math.abs(x - prev.x) < 4 &&
+        Math.abs(y - prev.y) < 4
+      ) {
+        return prev;
+      }
+      return { info, x, y };
+    });
+  }, []);
   const abortRef = useRef<AbortController | null>(null);
   const lastBbox = useRef<BBox | null>(null);
 
@@ -255,17 +331,17 @@ export default function App() {
     });
   }, [showTrees, osm]);
 
-  const fitTarget = osm
-    ? (() => {
-        const box = new THREE.Box3().setFromObject(osm.group);
-        const size = new THREE.Vector3();
-        const center = new THREE.Vector3();
-        box.getSize(size);
-        box.getCenter(center);
-        const radius = Math.max(size.x, size.z, 40) * 0.5;
-        return { x: center.x, z: center.z, radius };
-      })()
-    : null;
+  const fitKey = osm ? `${osm.bbox.south},${osm.bbox.west},${osm.buildingCount}` : null;
+  const fitTarget = useMemo(() => {
+    if (!osm) return null;
+    const box = new THREE.Box3().setFromObject(osm.group);
+    const size = new THREE.Vector3();
+    const center = new THREE.Vector3();
+    box.getSize(size);
+    box.getCenter(center);
+    const radius = Math.max(size.x, size.z, 40) * 0.5;
+    return { x: center.x, z: center.z, radius };
+  }, [osm]);
 
   const openImport = () => {
     setError(null);
@@ -288,9 +364,17 @@ export default function App() {
         <Suspense fallback={null}>{!osm && <GroundPlane size={400} />}</Suspense>
         <group>{osm && <primitive object={osm.group} />}</group>
         {showGrid && <gridHelper args={[2000, 40, '#3a3a3c', '#2c2c2e']} position={[0, 0.02, 0]} />}
-        <OrbitControls makeDefault enableDamping dampingFactor={0.08} minDistance={10} maxDistance={12_000} maxPolarAngle={Math.PI / 2.02} />
-        <CameraFit target={fitTarget} />
-        <PickBridge enabled={!!osm && tool === 'select'} onHover={(info, x, y) => setHover({ info, x, y })} />
+        <OrbitControls
+          makeDefault
+          enableDamping
+          dampingFactor={0.08}
+          minDistance={10}
+          maxDistance={12_000}
+          maxPolarAngle={Math.PI / 2.02}
+        />
+        <CameraFit target={fitTarget} fitKey={fitKey} />
+        <CameraYawReporter onYaw={onYaw} />
+        <PickBridge enabled={!!osm && tool === 'select'} onHover={handleHover} />
       </Canvas>
 
       <div style={hud.top}>
@@ -342,7 +426,7 @@ export default function App() {
       />
 
       <Minimap bbox={osm?.bbox ?? null} visible={!!osm} />
-      <NorthArrow visible={showNorth && !!osm} />
+      <NorthArrow visible={showNorth && !!osm} yawDeg={yawDeg} />
       <HoverHud info={hover.info} x={hover.x} y={hover.y} />
 
       {osm && (
