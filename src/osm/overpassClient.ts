@@ -40,6 +40,8 @@ function padBbox(bbox: BBox, padDeg = 0.0015): BBox {
 function buildQuery(bbox: BBox): string {
   const b = padBbox(bbox);
   const bb = `${b.south},${b.west},${b.north},${b.east}`;
+  // IMPORTANT: only `out geom` — `out body` alone yields ways without coordinates
+  // (trees as nodes still get lat/lon via out geom).
   return `
 [out:json][timeout:30];
 (
@@ -63,13 +65,7 @@ function buildQuery(bbox: BBox): string {
   way["natural"="scrub"](${bb});
   way["natural"="grassland"](${bb});
   node["natural"="tree"](${bb});
-  relation["natural"="water"](${bb});
-  relation["waterway"="riverbank"](${bb});
-  relation["leisure"="park"](${bb});
-  relation["landuse"="forest"](${bb});
 );
-out body;
->;
 out geom;
 `.trim();
 }
