@@ -33,6 +33,11 @@ export interface OsmContextMeshes {
   clipRect: Rect;
 }
 
+export interface OsmBuildOptions {
+  quality?: 'low' | 'med';
+  showTrees?: boolean;
+}
+
 function localToWorld(p: Point2D, yUp = 0): THREE.Vector3 {
   return new THREE.Vector3(p.x, yUp, -p.y);
 }
@@ -165,8 +170,11 @@ function dashedCenterLine(centerline: Point2D[], yUp: number, positions: number[
 export function buildOsmContextLayer(
   data: OverpassResponse,
   origin: SceneOrigin,
-  bbox: BBox
+  bbox: BBox,
+  options?: OsmBuildOptions
 ): OsmContextMeshes {
+  const quality = options?.quality ?? 'med';
+  const showTrees = options?.showTrees !== false;
   const group = new THREE.Group();
   group.name = 'OsmContextLayer';
   group.userData.nonPickable = true;
@@ -231,11 +239,16 @@ export function buildOsmContextLayer(
       geom.rotateX(-Math.PI / 2);
       const wallMat = getFacadeMaterial(style, peri * 0.35, height);
       const mesh = new THREE.Mesh(geom, wallMat);
-      mesh.userData.nonPickable = true;
+      mesh.userData.nonPickable = false;
       mesh.userData.osmId = el.id;
+      mesh.userData.kind = 'building';
+      mesh.userData.osmTags = tags;
       group.add(mesh);
       const roofMesh = flatMeshFromRing(clipped, height + 0.06, getRoofMaterial(style));
-      if (roofMesh) group.add(roofMesh);
+      if (roofMesh) {
+        roofMesh.userData.nonPickable = true;
+        group.add(roofMesh);
+      }
       buildingCount++;
       continue;
     }
@@ -243,6 +256,9 @@ export function buildOsmContextLayer(
     if (tags.highway) {
       const ring = wayToLocalRing(el, origin);
       if (!ring || ring.length < 2) continue;
+      if (quality === 'low' && (isFootOnly(tags.highway) || tags.highway === 'service' || tags.highway === 'track')) {
+        continue;
+      }
       const profile = roadProfile(tags.highway, tags);
       for (const seg of clipPolylineToRect(ring, clipRect)) {
         if (seg.length < 2) continue;
@@ -256,6 +272,9 @@ export function buildOsmContextLayer(
         if (carClipped.length >= 3) {
           const mesh = flatMeshFromRing(carClipped, 0.04, isFootOnly(tags.highway) ? footMat : asphaltMat);
           if (mesh) {
+            mesh.userData.kind = 'road';
+            mesh.userData.osmTags = tags;
+            mesh.userData.nonPickable = false;
             group.add(mesh);
             roadCount++;
           }
@@ -313,7 +332,7 @@ export function buildOsmContextLayer(
     group.add(lines);
   }
 
-  const treeCount = Math.min(treePositions.length, 800);
+  const treeCount = showTrees ? Math.min(treePositions.length, 800) : 0;
   if (treeCount > 0) {
     const trunkGeom = new THREE.CylinderGeometry(0.15, 0.22, 1.2, 5);
     const crownGeom = new THREE.SphereGeometry(1.4, 6, 5);
@@ -334,7 +353,9 @@ export function buildOsmContextLayer(
       crowns.setMatrixAt(i, m);
     }
     trunks.userData.nonPickable = true;
+    trunks.userData.kind = 'tree';
     crowns.userData.nonPickable = true;
+    crowns.userData.kind = 'tree';
     group.add(trunks);
     group.add(crowns);
   }
