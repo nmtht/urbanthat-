@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 
-export type OsmQuality = 'low' | 'med';
+export type OsmQuality = 'low' | 'med' | 'high';
 
 interface Props {
   open: boolean;
@@ -48,14 +48,14 @@ export function ScenePanel(props: Props) {
 
       <div style={s.section}>OSM quality</div>
       <div style={s.seg}>
-        {(['low', 'med'] as const).map((q) => (
+        {(['low', 'med', 'high'] as const).map((q) => (
           <button
             key={q}
             type="button"
             style={{ ...s.segBtn, ...(props.quality === q ? s.segOn : null) }}
             onClick={() => props.onQuality(q)}
           >
-            {q === 'low' ? 'Low' : 'Medium'}
+            {q === 'low' ? 'Low' : q === 'med' ? 'Med' : 'High'}
           </button>
         ))}
       </div>
