@@ -21,8 +21,8 @@ export function NorthArrow({ visible, yawDeg = 0 }: Props) {
 const s: Record<string, CSSProperties> = {
   wrap: {
     position: 'absolute',
-    right: 170,
-    bottom: 24,
+    right: 16,
+    bottom: 16,
     width: 40,
     height: 40,
     borderRadius: 20,
