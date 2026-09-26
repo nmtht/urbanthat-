@@ -8,8 +8,11 @@ export interface OverpassNodeGeom {
 export interface OverpassElement {
   type: 'way' | 'node' | 'relation';
   id: number;
+  lat?: number;
+  lon?: number;
   tags?: Record<string, string>;
   geometry?: OverpassNodeGeom[];
+  members?: Array<{ type: string; ref: number; role: string }>;
 }
 
 export interface OverpassResponse {
@@ -23,13 +26,20 @@ const ENDPOINTS = [
   'https://overpass-api.openstreetmap.fr/api/interpreter',
 ];
 
-const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_TIMEOUT_MS = 35_000;
+
+function padBbox(bbox: BBox, padDeg = 0.0015): BBox {
+  return {
+    south: bbox.south - padDeg,
+    west: bbox.west - padDeg,
+    north: bbox.north + padDeg,
+    east: bbox.east + padDeg,
+  };
+}
 
 function buildQuery(bbox: BBox): string {
-  const { south, west, north, east } = bbox;
-  const bb = `${south},${west},${north},${east}`;
-  // Buildings, roads, water, greenery (ways with geometry).
-  // Relations/multipolygons omitted for MVP simplicity.
+  const b = padBbox(bbox);
+  const bb = `${b.south},${b.west},${b.north},${b.east}`;
   return `
 [out:json][timeout:30];
 (
@@ -52,7 +62,14 @@ function buildQuery(bbox: BBox): string {
   way["natural"="wood"](${bb});
   way["natural"="scrub"](${bb});
   way["natural"="grassland"](${bb});
+  node["natural"="tree"](${bb});
+  relation["natural"="water"](${bb});
+  relation["waterway"="riverbank"](${bb});
+  relation["leisure"="park"](${bb});
+  relation["landuse"="forest"](${bb});
 );
+out body;
+>;
 out geom;
 `.trim();
 }
@@ -68,10 +85,6 @@ export class OverpassError extends Error {
   }
 }
 
-/**
- * Fetch buildings, highways, water and greenery for a bbox.
- * Tries endpoints in order until one succeeds.
- */
 export async function fetchOsmFragment(
   bbox: BBox,
   options?: { signal?: AbortSignal; timeoutMs?: number }
@@ -84,25 +97,18 @@ export async function fetchOsmFragment(
     const controller = new AbortController();
     const onAbort = () => controller.abort();
     options?.signal?.addEventListener('abort', onAbort);
-
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const res = await fetch(endpoint, {
         method: 'POST',
         body: `data=${encodeURIComponent(query)}`,
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         signal: controller.signal,
       });
 
       if (!res.ok) {
-        lastError = new OverpassError(
-          `Overpass HTTP ${res.status}`,
-          res.status,
-          endpoint
-        );
+        lastError = new OverpassError(`Overpass HTTP ${res.status}`, res.status, endpoint);
         continue;
       }
 
