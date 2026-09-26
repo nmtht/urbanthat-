@@ -1,14 +1,29 @@
 import type { Point2D } from '../domain/SceneOrigin';
 
-/** 2D geometry: polyline offset (miter) + Sutherland-Hodgman rect clip. */
+/** 2D geometry: polyline offset (miter + round) + Sutherland-Hodgman rect clip. */
 
-function sub(a: Point2D, b: Point2D): Point2D { return { x: a.x - b.x, y: a.y - b.y }; }
-function add(a: Point2D, b: Point2D): Point2D { return { x: a.x + b.x, y: a.y + b.y }; }
-function mul(a: Point2D, s: number): Point2D { return { x: a.x * s, y: a.y * s }; }
-function len(a: Point2D): number { return Math.hypot(a.x, a.y); }
-function norm(a: Point2D): Point2D { const l = len(a) || 1; return { x: a.x / l, y: a.y / l }; }
-function perp(a: Point2D): Point2D { return { x: -a.y, y: a.x }; }
-function dot(a: Point2D, b: Point2D): number { return a.x * b.x + a.y * b.y; }
+function sub(a: Point2D, b: Point2D): Point2D {
+  return { x: a.x - b.x, y: a.y - b.y };
+}
+function add(a: Point2D, b: Point2D): Point2D {
+  return { x: a.x + b.x, y: a.y + b.y };
+}
+function mul(a: Point2D, s: number): Point2D {
+  return { x: a.x * s, y: a.y * s };
+}
+function len(a: Point2D): number {
+  return Math.hypot(a.x, a.y);
+}
+function norm(a: Point2D): Point2D {
+  const l = len(a) || 1;
+  return { x: a.x / l, y: a.y / l };
+}
+function perp(a: Point2D): Point2D {
+  return { x: -a.y, y: a.x };
+}
+function dot(a: Point2D, b: Point2D): number {
+  return a.x * b.x + a.y * b.y;
+}
 
 export function simplifyPolyline(pts: Point2D[], minDist = 0.3): Point2D[] {
   if (pts.length < 2) return pts.slice();
@@ -21,7 +36,11 @@ export function simplifyPolyline(pts: Point2D[], minDist = 0.3): Point2D[] {
   return out;
 }
 
-export function offsetPolyline(ptsIn: Point2D[], dist: number, miterLimit = 3): { left: Point2D[]; right: Point2D[] } {
+export function offsetPolyline(
+  ptsIn: Point2D[],
+  dist: number,
+  miterLimit = 3
+): { left: Point2D[]; right: Point2D[] } {
   const pts = simplifyPolyline(ptsIn);
   if (pts.length < 2) return { left: [], right: [] };
   const left: Point2D[] = [];
@@ -48,12 +67,74 @@ export function offsetPolyline(ptsIn: Point2D[], dist: number, miterLimit = 3): 
   return { left, right };
 }
 
+/**
+ * Offset with rounded exterior corners (curb radius).
+ */
+export function roundOffsetPolyline(
+  ptsIn: Point2D[],
+  dist: number,
+  radiusM = Math.min(Math.abs(dist) * 0.85, 4),
+  arcStepM = 0.6
+): { left: Point2D[]; right: Point2D[] } {
+  const pts = simplifyPolyline(ptsIn, 0.4);
+  if (pts.length < 2) return { left: [], right: [] };
+
+  function side(sign: number): Point2D[] {
+    const out: Point2D[] = [];
+    for (let i = 0; i < pts.length; i++) {
+      const prev = pts[Math.max(0, i - 1)];
+      const curr = pts[i];
+      const next = pts[Math.min(pts.length - 1, i + 1)];
+      let dirIn = norm(sub(curr, prev));
+      let dirOut = norm(sub(next, curr));
+      if (i === 0) dirIn = dirOut;
+      if (i === pts.length - 1) dirOut = dirIn;
+      const nIn = mul(perp(dirIn), sign);
+      const nOut = mul(perp(dirOut), sign);
+      const turn = dirIn.x * dirOut.y - dirIn.y * dirOut.x;
+      const exterior = (sign > 0 && turn > 0.05) || (sign < 0 && turn < -0.05);
+      if (!exterior || i === 0 || i === pts.length - 1 || radiusM < 0.15) {
+        let m = add(nIn, nOut);
+        const ml = len(m);
+        m = ml < 1e-8 ? nIn : mul(m, 1 / ml);
+        const cos = Math.max(dot(m, nIn), 0.25);
+        out.push(add(curr, mul(m, Math.abs(dist) / cos)));
+      } else {
+        const a0 = Math.atan2(nIn.y, nIn.x);
+        let a1 = Math.atan2(nOut.y, nOut.x);
+        let da = a1 - a0;
+        if (sign > 0) {
+          while (da < 0) da += Math.PI * 2;
+          while (da > Math.PI * 2) da -= Math.PI * 2;
+        } else {
+          while (da > 0) da -= Math.PI * 2;
+          while (da < -Math.PI * 2) da += Math.PI * 2;
+        }
+        const r = Math.abs(dist);
+        const steps = Math.max(2, Math.ceil((Math.abs(da) * r) / arcStepM));
+        for (let s = 0; s <= steps; s++) {
+          const a = a0 + (da * s) / steps;
+          out.push({ x: curr.x + Math.cos(a) * r, y: curr.y + Math.sin(a) * r });
+        }
+      }
+    }
+    return out;
+  }
+
+  return { left: side(1), right: side(-1) };
+}
+
 export function corridorPolygon(left: Point2D[], right: Point2D[]): Point2D[] {
   if (left.length < 2 || right.length < 2) return [];
   return [...left, ...right.slice().reverse()];
 }
 
-export interface Rect { minX: number; minY: number; maxX: number; maxY: number; }
+export interface Rect {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
 
 function intersectX(a: Point2D, b: Point2D, x: number): Point2D {
   const dx = b.x - a.x;
