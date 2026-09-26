@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, Sky, Stars } from '@react-three/drei';
-import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { GroundPlane } from './render/GroundPlane';
 import { ImportMapDialog } from './ui/ImportMapDialog';
@@ -17,8 +17,6 @@ import {
   disposeOsmContextLayer,
 } from './osm/osmContextLayer';
 
-type DayMode = 'day' | 'dusk' | 'night';
-
 interface OsmState {
   origin: SceneOrigin;
   group: THREE.Group;
@@ -28,6 +26,17 @@ interface OsmState {
   greenCount: number;
   treeCount: number;
   bbox: BBox;
+}
+
+function sunFromHour(hour: number): THREE.Vector3 {
+  const t = ((hour - 6) / 12) * Math.PI;
+  const elevation = Math.sin(t);
+  const azimuth = ((hour - 12) / 12) * Math.PI;
+  const r = 120;
+  const y = Math.max(elevation, -0.15) * 80;
+  const x = Math.cos(azimuth) * r;
+  const z = Math.sin(azimuth) * r * 0.6;
+  return new THREE.Vector3(x, y, z);
 }
 
 function CameraFit({
@@ -52,33 +61,39 @@ function CameraFit({
   return null;
 }
 
-function Environment({ mode }: { mode: DayMode }) {
-  if (mode === 'night') {
+function Environment({ hour }: { hour: number }) {
+  const sun = useMemo(() => sunFromHour(hour), [hour]);
+  const elev = sun.y;
+  const isNight = elev < 5;
+
+  if (isNight) {
     return (
       <>
         <color attach="background" args={['#0b0e14']} />
-        <ambientLight intensity={0.25} />
-        <directionalLight position={[40, 80, 20]} intensity={0.15} color="#a8b4c8" />
-        <Stars radius={400} depth={80} count={4000} factor={3} saturation={0} fade speed={0.4} />
+        <ambientLight intensity={0.22} />
+        <directionalLight position={[sun.x, Math.abs(sun.y) + 20, sun.z]} intensity={0.12} color="#a8b4c8" />
+        <Stars radius={400} depth={80} count={5000} factor={3} saturation={0} fade speed={0.35} />
       </>
     );
   }
-  if (mode === 'dusk') {
-    return (
-      <>
-        <Sky sunPosition={[-20, 2, -40]} turbidity={8} rayleigh={2.5} mieCoefficient={0.01} mieDirectionalG={0.8} />
-        <ambientLight intensity={0.35} color="#ffd0b0" />
-        <directionalLight position={[-40, 15, -30]} intensity={0.9} color="#ff9a5c" />
-        <hemisphereLight args={['#ffb070', '#2a2030', 0.4]} />
-      </>
-    );
-  }
+
+  const dusk = elev < 25;
   return (
     <>
-      <Sky sunPosition={[80, 40, 40]} turbidity={4} rayleigh={1.2} mieCoefficient={0.005} mieDirectionalG={0.8} />
-      <ambientLight intensity={0.45} />
-      <directionalLight position={[120, 180, 80]} intensity={1.15} color="#fff5e6" />
-      <hemisphereLight args={['#c8daf0', '#3a3a38', 0.35]} />
+      <Sky
+        sunPosition={[sun.x, sun.y, sun.z]}
+        turbidity={dusk ? 7 : 3.5}
+        rayleigh={dusk ? 2.2 : 1.1}
+        mieCoefficient={dusk ? 0.012 : 0.005}
+        mieDirectionalG={0.8}
+      />
+      <ambientLight intensity={dusk ? 0.35 : 0.48} color={dusk ? '#ffd0b0' : '#ffffff'} />
+      <directionalLight
+        position={[sun.x, sun.y, sun.z]}
+        intensity={dusk ? 0.85 : 1.2}
+        color={dusk ? '#ff9a5c' : '#fff5e6'}
+      />
+      <hemisphereLight args={[dusk ? '#ffb070' : '#c8daf0', '#3a3a38', dusk ? 0.4 : 0.35]} />
     </>
   );
 }
@@ -89,7 +104,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [osm, setOsm] = useState<OsmState | null>(null);
   const [status, setStatus] = useState('Urban That \u00b7 import a map fragment to begin');
-  const [dayMode, setDayMode] = useState<DayMode>('day');
+  const [hour, setHour] = useState(14);
   const abortRef = useRef<AbortController | null>(null);
 
   const clearOsm = useCallback(() => {
@@ -110,6 +125,14 @@ export default function App() {
 
       try {
         const data = await fetchOsmFragment(bbox, { signal: ac.signal });
+        const ways = data.elements.filter((e) => e.type === 'way');
+        const waysGeom = ways.filter((e) => e.geometry && e.geometry.length >= 2);
+        console.info('[OSM]', {
+          total: data.elements.length,
+          ways: ways.length,
+          waysWithGeometry: waysGeom.length,
+        });
+
         const center = bboxCenter(bbox);
         const origin = createSceneOrigin(center.lat, center.lon);
         const built = buildOsmContextLayer(data, origin, bbox);
@@ -126,7 +149,7 @@ export default function App() {
           bbox,
         });
         setStatus(
-          `OSM \u00b7 ${built.buildingCount} bld \u00b7 ${built.roadCount} roads \u00b7 ${built.waterCount} water \u00b7 ${built.greenCount} green \u00b7 ${built.treeCount} trees`
+          `OSM \u00b7 ${built.buildingCount} bld \u00b7 ${built.roadCount} roads \u00b7 ${built.waterCount} water \u00b7 ${built.greenCount} green \u00b7 ${built.treeCount} trees \u00b7 geom ${waysGeom.length}/${ways.length}`
         );
         setDialogOpen(false);
       } catch (err) {
@@ -162,9 +185,7 @@ export default function App() {
       })()
     : null;
 
-  const cycleDay = () => {
-    setDayMode((m) => (m === 'day' ? 'dusk' : m === 'dusk' ? 'night' : 'day'));
-  };
+  const hourLabel = `${String(Math.floor(hour)).padStart(2, '0')}:${hour % 1 >= 0.5 ? '30' : '00'}`;
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
@@ -178,7 +199,7 @@ export default function App() {
           gl.toneMappingExposure = 1.05;
         }}
       >
-        <Environment mode={dayMode} />
+        <Environment hour={hour} />
         <Suspense fallback={null}>{!osm && <GroundPlane size={2000} />}</Suspense>
         <group>{osm && <primitive object={osm.group} />}</group>
         <OrbitControls
@@ -195,9 +216,19 @@ export default function App() {
       <div style={hud.bar}>
         <span style={hud.status}>{status}</span>
         <div style={hud.actions}>
-          <button type="button" style={hud.btn} onClick={cycleDay} title="Day / Dusk / Night">
-            {dayMode === 'day' ? 'Day' : dayMode === 'dusk' ? 'Dusk' : 'Night'}
-          </button>
+          <div style={hud.timeWrap}>
+            <span style={hud.timeLabel}>{hourLabel}</span>
+            <input
+              type="range"
+              min={0}
+              max={24}
+              step={0.25}
+              value={hour}
+              onChange={(e) => setHour(parseFloat(e.target.value))}
+              style={hud.slider}
+              title="Time of day"
+            />
+          </div>
           {osm && (
             <button type="button" style={hud.btn} onClick={handleRefresh} disabled={loading}>
               Refresh OSM
@@ -247,11 +278,33 @@ const hud: Record<string, CSSProperties> = {
     fontSize: 13,
     letterSpacing: '-0.01em',
     textShadow: '0 1px 3px rgba(0,0,0,0.5)',
+    maxWidth: '45%',
   },
   actions: {
     display: 'flex',
-    gap: 8,
+    gap: 10,
+    alignItems: 'center',
     pointerEvents: 'auto',
+  },
+  timeWrap: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    background: 'rgba(58,58,60,0.9)',
+    borderRadius: 8,
+    padding: '4px 10px',
+    backdropFilter: 'blur(8px)',
+  },
+  timeLabel: {
+    color: '#f5f5f7',
+    fontSize: 12,
+    fontVariantNumeric: 'tabular-nums',
+    minWidth: 40,
+  },
+  slider: {
+    width: 120,
+    cursor: 'pointer',
+    accentColor: '#0a84ff',
   },
   btn: {
     background: 'rgba(58,58,60,0.9)',
