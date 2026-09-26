@@ -103,7 +103,6 @@ function wayToLocalRing(el: OverpassElement, origin: SceneOrigin): Point2D[] | n
 }
 
 function isWater(tags: Record<string, string>): boolean {
-  // Exclude natural=bay (often huge coastal polygons that flood the scene)
   if (tags.natural === 'water') return true;
   if (tags.waterway === 'riverbank') return true;
   if (tags.landuse === 'reservoir' || tags.landuse === 'basin') return true;
@@ -135,11 +134,44 @@ function polygonArea(ring: Point2D[]): number {
   return Math.abs(a) * 0.5;
 }
 
-function isClosedRing(ring: Point2D[], tol = 2.0): boolean {
-  if (ring.length < 3) return false;
-  const a = ring[0];
-  const b = ring[ring.length - 1];
-  return Math.hypot(a.x - b.x, a.y - b.y) < tol;
+/** True if ring has vertices near/inside rect (not pure container of the bbox). */
+function ringTouchesRect(ring: Point2D[], rect: Rect, pad = 30): boolean {
+  const r = {
+    minX: rect.minX - pad,
+    maxX: rect.maxX + pad,
+    minY: rect.minY - pad,
+    maxY: rect.maxY + pad,
+  };
+  let inside = 0;
+  for (const p of ring) {
+    if (p.x >= r.minX && p.x <= r.maxX && p.y >= r.minY && p.y <= r.maxY) inside++;
+  }
+  if (inside > 0) return true;
+
+  let minX = Infinity,
+    maxX = -Infinity,
+    minY = Infinity,
+    maxY = -Infinity;
+  for (const p of ring) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  const contains =
+    minX < rect.minX && maxX > rect.maxX && minY < rect.minY && maxY > rect.maxY;
+  // Containing ring with no vertex near bbox → SH would return full rect → flood
+  if (contains) return false;
+  const overlaps =
+    !(maxX < rect.minX || minX > rect.maxX || maxY < rect.minY || minY > rect.maxY);
+  return overlaps;
+}
+
+function isAlmostBBox(poly: Point2D[], rect: Rect, frac = 0.92): boolean {
+  const a = polygonArea(poly);
+  const bboxA = (rect.maxX - rect.minX) * (rect.maxY - rect.minY);
+  if (bboxA <= 0) return false;
+  return a / bboxA >= frac;
 }
 
 function addPolygonMeshes(
@@ -148,21 +180,19 @@ function addPolygonMeshes(
   yUp: number,
   mat: THREE.Material,
   group: THREE.Group,
-  opts?: { maxAreaFrac?: number; requireClosed?: boolean }
+  opts?: { maxAreaFrac?: number; requireTouch?: boolean }
 ): boolean {
-  if (opts?.requireClosed && !isClosedRing(ring) && ring.length > 4) {
-    // open ring — still try clip, reject if result is huge via maxAreaFrac
+  if (opts?.requireTouch !== false && !ringTouchesRect(ring, rect)) {
+    return false;
   }
   const clipped = clipPolygonToRect(ring, rect);
   if (clipped.length < 3) return false;
   const area = polygonArea(clipped);
-  if (area < 4) return false;
+  if (area < 8) return false;
+  if (isAlmostBBox(clipped, rect)) return false;
   if (opts?.maxAreaFrac != null) {
     const bboxA = (rect.maxX - rect.minX) * (rect.maxY - rect.minY);
-    if (bboxA > 0 && area / bboxA > opts.maxAreaFrac) {
-      // Flood from bad multipolygon / failed clip — skip
-      return false;
-    }
+    if (bboxA > 0 && area / bboxA > opts.maxAreaFrac) return false;
   }
   const mesh = flatMeshFromRing(clipped, yUp, mat);
   if (!mesh) return false;
@@ -242,14 +272,6 @@ export function buildOsmContextLayer(
     polygonOffsetFactor: 1,
     polygonOffsetUnits: 1,
   });
-  const sidewalkMat = new THREE.MeshStandardMaterial({
-    color: '#5a5a58',
-    roughness: 0.9,
-    metalness: 0,
-    polygonOffset: true,
-    polygonOffsetFactor: 2,
-    polygonOffsetUnits: 2,
-  });
   const footMat = new THREE.MeshStandardMaterial({
     color: '#4a4844',
     roughness: 0.9,
@@ -266,7 +288,6 @@ export function buildOsmContextLayer(
   const treePositions: THREE.Vector3[] = [];
   const lanePositions: number[] = [];
   const asphaltPolys: Point2D[][] = [];
-  const sidewalkPolys: Point2D[][] = [];
   const footPolys: Point2D[][] = [];
   const roadTagSamples: Record<string, string>[] = [];
 
@@ -310,8 +331,8 @@ export function buildOsmContextLayer(
         for (const ring of outers) {
           if (
             addPolygonMeshes(ring, clipRect, -0.02, waterMat, group, {
-              maxAreaFrac: 0.55,
-              requireClosed: true,
+              maxAreaFrac: 0.35,
+              requireTouch: true,
             })
           )
             waterCount++;
@@ -320,7 +341,8 @@ export function buildOsmContextLayer(
       }
       if (isGreen(el.tags)) {
         for (const ring of outers) {
-          if (addPolygonMeshes(ring, clipRect, 0.015, greenMat, group)) greenCount++;
+          if (addPolygonMeshes(ring, clipRect, 0.015, greenMat, group, { requireTouch: false }))
+            greenCount++;
         }
         continue;
       }
@@ -376,7 +398,6 @@ export function buildOsmContextLayer(
         const clean = simplifyPolyline(seg, 0.8);
         if (clean.length < 2) continue;
         const half = profile.widthM / 2;
-        // Stable miter offset (roundOffset caused gaps / bowties at joints)
         const { left, right } = offsetPolyline(clean, half, 2.5);
         if (left.length >= 2 && right.length >= 2) {
           const carriage = corridorPolygon(left, right);
@@ -387,15 +408,8 @@ export function buildOsmContextLayer(
             roadCount++;
           }
         }
-        if (!foot && profile.sidewalkM > 0.4) {
-          const { left: l2, right: r2 } = offsetPolyline(clean, half + profile.sidewalkM, 2.5);
-          if (l2.length >= 2 && r2.length >= 2) {
-            const sw = corridorPolygon(l2, r2);
-            if (sw.length >= 3) sidewalkPolys.push(sw);
-          }
-        }
+        // No solid sidewalk slabs — they flooded courtyards as blue-gray fills
         if (profile.centerLine && profile.lanes >= 2) dashedCenterLine(clean, 0.08, lanePositions);
-        // Junction pads at EVERY vertex — closes T-junctions / corners
         if (!foot) {
           for (const pt of clean) {
             asphaltPolys.push(circlePolygon(pt.x, pt.y, half * 1.15, 14));
@@ -410,8 +424,8 @@ export function buildOsmContextLayer(
       if (!ring || ring.length < 3) continue;
       if (
         addPolygonMeshes(ring, clipRect, -0.02, waterMat, group, {
-          maxAreaFrac: 0.55,
-          requireClosed: true,
+          maxAreaFrac: 0.35,
+          requireTouch: true,
         })
       )
         waterCount++;
@@ -421,7 +435,7 @@ export function buildOsmContextLayer(
     if (isGreen(tags)) {
       const ring = wayToLocalRing(el, origin);
       if (!ring || ring.length < 3) continue;
-      if (addPolygonMeshes(ring, clipRect, 0.015, greenMat, group)) {
+      if (addPolygonMeshes(ring, clipRect, 0.015, greenMat, group, { requireTouch: false })) {
         greenCount++;
         if (ring.length >= 4 && (tags.landuse === 'forest' || tags.natural === 'wood')) {
           const step = Math.max(1, Math.floor(ring.length / 6));
@@ -449,10 +463,6 @@ export function buildOsmContextLayer(
       mesh.userData.nonPickable = false;
       group.add(mesh);
     }
-  }
-  for (const poly of sidewalkPolys) {
-    const mesh = flatMeshFromRing(poly, 0.02, sidewalkMat);
-    if (mesh) group.add(mesh);
   }
   for (const poly of footPolys) {
     const mesh = flatMeshFromRing(poly, 0.04, footMat);
