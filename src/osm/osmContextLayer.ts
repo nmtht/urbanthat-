@@ -10,7 +10,7 @@ import {
   roundOffsetPolyline,
   type Rect,
 } from '../geometry/polylineOffset';
-import { unionPolygons, circlePolygon } from '../geometry/polygonBoolean';
+import { circlePolygon } from '../geometry/polygonBoolean';
 import { roadProfile, isFootOnly } from './roadDefaults';
 import {
   facadeStyleFromBuildingTag,
@@ -393,20 +393,21 @@ export function buildOsmContextLayer(
     }
   }
 
-  for (const poly of unionPolygons(asphaltPolys)) {
-    const mesh = flatMeshFromRing(poly, 0.05, asphaltMat);
+  // Direct meshes — union collapsed thin corridors into invalid shapes
+  for (let i = 0; i < asphaltPolys.length; i++) {
+    const mesh = flatMeshFromRing(asphaltPolys[i], 0.05, asphaltMat);
     if (mesh) {
       mesh.userData.kind = 'road';
-      mesh.userData.osmTags = roadTagSamples[0] ?? { highway: 'residential' };
+      mesh.userData.osmTags = roadTagSamples[i] ?? roadTagSamples[0] ?? { highway: 'residential' };
       mesh.userData.nonPickable = false;
       group.add(mesh);
     }
   }
-  for (const poly of unionPolygons(sidewalkPolys)) {
+  for (const poly of sidewalkPolys) {
     const mesh = flatMeshFromRing(poly, 0.02, sidewalkMat);
     if (mesh) group.add(mesh);
   }
-  for (const poly of unionPolygons(footPolys)) {
+  for (const poly of footPolys) {
     const mesh = flatMeshFromRing(poly, 0.04, footMat);
     if (mesh) {
       mesh.userData.kind = 'road';
