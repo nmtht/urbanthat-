@@ -1,21 +1,23 @@
 import type { Point2D } from '../domain/SceneOrigin';
 import type { RoadCenterline, RoadProfile } from '../domain/roads';
-import { getRoadProfile } from '../domain/roads';
+import { resolveRoadGeometry } from '../domain/roads';
 import {
   simplifyPolyline,
   offsetPolyline,
   corridorPolygon,
 } from './polylineOffset';
+import { findJunctionHubs } from './junctions';
 
 export interface RoadGeometry {
   id: string;
-  /** Single corridor polygon for this road (no network hull). */
   carriagePoly: Point2D[];
-  /** Optional left/right sidewalk strip polygons. */
+  parkingPolys: Point2D[][];
+  greenPolys: Point2D[][];
   sidewalkPolys: Point2D[][];
   markingSegments: Point2D[][];
   profile: RoadProfile;
   centerline: RoadCenterline;
+  carriageWidthM: number;
 }
 
 export function localToWorld(p: Point2D, yUp = 0): { x: number; y: number; z: number } {
@@ -66,56 +68,88 @@ function dashedSegments(
   }
 }
 
-/** Build geometry for one road — independent corridor, no network merge. */
+function stripBetween(inner: Point2D[], outer: Point2D[]): Point2D[] | null {
+  if (inner.length < 2 || outer.length < 2) return null;
+  const strip = [...outer, ...inner.slice().reverse()];
+  return strip.length >= 3 ? strip : null;
+}
+
 export function buildRoadGeometry(road: RoadCenterline): RoadGeometry | null {
-  const profile = getRoadProfile(road.profileId);
+  const g = resolveRoadGeometry(road.profileId, road.options);
   const pts = simplifyPolyline(road.points, 0.4);
   if (pts.length < 2) return null;
 
-  const half = profile.widthM / 2;
-  const { left, right } = offsetPolyline(pts, half, 2.5);
+  const halfC = g.carriageWidthM / 2;
+  const { left, right } = offsetPolyline(pts, halfC, 2.5);
   if (left.length < 2 || right.length < 2) return null;
-
   const carriagePoly = corridorPolygon(left, right);
   if (carriagePoly.length < 3) return null;
 
-  // Sidewalk strips: band between half and half+sidewalk on each side
+  const parkingPolys: Point2D[][] = [];
+  const greenPolys: Point2D[][] = [];
   const sidewalkPolys: Point2D[][] = [];
-  if (profile.sidewalkM > 0.1) {
-    const outerHalf = half + profile.sidewalkM;
-    const { left: lOut, right: rOut } = offsetPolyline(pts, outerHalf, 2.5);
-    if (lOut.length >= 2 && left.length >= 2) {
-      // left strip: outer-left forward, inner-left reversed
-      const stripL = [...lOut, ...left.slice().reverse()];
-      if (stripL.length >= 3) sidewalkPolys.push(stripL);
-    }
-    if (rOut.length >= 2 && right.length >= 2) {
-      const stripR = [...right, ...rOut.slice().reverse()];
-      if (stripR.length >= 3) sidewalkPolys.push(stripR);
-    }
+
+  let outerHalf = halfC;
+
+  if (g.parkingM > 0.05) {
+    const next = outerHalf + g.parkingM;
+    const { left: l2, right: r2 } = offsetPolyline(pts, next, 2.5);
+    const { left: l1, right: r1 } = offsetPolyline(pts, outerHalf, 2.5);
+    const sl = stripBetween(l1, l2);
+    const sr = stripBetween(r1, r2);
+    if (sl) parkingPolys.push(sl);
+    if (sr) parkingPolys.push(sr);
+    outerHalf = next;
+  }
+
+  if (g.greenBufferM > 0.05) {
+    const next = outerHalf + g.greenBufferM;
+    const { left: l2, right: r2 } = offsetPolyline(pts, next, 2.5);
+    const { left: l1, right: r1 } = offsetPolyline(pts, outerHalf, 2.5);
+    const sl = stripBetween(l1, l2);
+    const sr = stripBetween(r1, r2);
+    if (sl) greenPolys.push(sl);
+    if (sr) greenPolys.push(sr);
+    outerHalf = next;
+  }
+
+  if (g.sidewalkM > 0.05) {
+    const next = outerHalf + g.sidewalkM;
+    const { left: l2, right: r2 } = offsetPolyline(pts, next, 2.5);
+    const { left: l1, right: r1 } = offsetPolyline(pts, outerHalf, 2.5);
+    const sl = stripBetween(l1, l2);
+    const sr = stripBetween(r1, r2);
+    if (sl) sidewalkPolys.push(sl);
+    if (sr) sidewalkPolys.push(sr);
   }
 
   const markingSegments: Point2D[][] = [];
-  if (profile.centerLine && profile.lanes >= 2) {
+  if (g.profile.centerLine && g.lanes >= 2) {
     dashedSegments(pts, 2.5, 2.0, markingSegments);
   }
 
   return {
     id: road.id,
     carriagePoly,
+    parkingPolys,
+    greenPolys,
     sidewalkPolys,
     markingSegments,
-    profile,
+    profile: g.profile,
     centerline: { ...road, points: pts },
+    carriageWidthM: g.carriageWidthM,
   };
 }
 
-/** Build all roads independently (no convex-hull union — that created giant blobs). */
-export function buildNetworkGeometry(roads: RoadCenterline[]): RoadGeometry[] {
+export function buildNetworkGeometry(roads: RoadCenterline[]): {
+  roads: RoadGeometry[];
+  hubs: Point2D[][];
+} {
   const out: RoadGeometry[] = [];
   for (const road of roads) {
     const g = buildRoadGeometry(road);
     if (g) out.push(g);
   }
-  return out;
+  const hubs = findJunctionHubs(roads);
+  return { roads: out, hubs };
 }
