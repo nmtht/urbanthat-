@@ -10,7 +10,6 @@ interface Props {
 
 function ringToShape(ring: { x: number; y: number }[]): THREE.Shape | null {
   if (ring.length < 3) return null;
-  // Drop consecutive duplicates that break ShapeGeometry
   const clean: { x: number; y: number }[] = [ring[0]];
   for (let i = 1; i < ring.length; i++) {
     const p = ring[i];
@@ -35,7 +34,6 @@ function meshFromRing(
   if (!shape) return null;
   try {
     const geom = new THREE.ShapeGeometry(shape);
-    // Shape is in XY; rotate to XZ ground plane (y-up)
     geom.rotateX(-Math.PI / 2);
     geom.translate(0, yUp, 0);
     geom.computeVertexNormals();
@@ -71,29 +69,54 @@ export function UserRoadsLayer({ roads }: Props) {
       });
     }
 
-    const network = buildNetworkGeometry(roads);
+    const { roads: network, hubs } = buildNetworkGeometry(roads);
+
+    if (hubs.length > 0) {
+      const hubMat = new THREE.MeshStandardMaterial({
+        color: '#2c2c2e',
+        roughness: 0.88,
+        metalness: 0.04,
+        side: THREE.DoubleSide,
+      });
+      for (const hub of hubs) {
+        const mesh = meshFromRing(hub, 0.055, hubMat, {
+          kind: 'user-road-hub',
+          nonPickable: true,
+        });
+        if (mesh) group.add(mesh);
+      }
+    }
 
     for (const g of network) {
-      // Sidewalk under asphalt
-      if (g.sidewalkPolys.length > 0) {
-        const swMat = new THREE.MeshStandardMaterial({
-          color: '#4a4846',
-          roughness: 0.92,
+      const addStrips = (
+        polys: { x: number; y: number }[][],
+        color: string,
+        y: number,
+        kind: string
+      ) => {
+        if (!polys.length) return;
+        const mat = new THREE.MeshStandardMaterial({
+          color,
+          roughness: 0.9,
           metalness: 0,
           side: THREE.DoubleSide,
           polygonOffset: true,
           polygonOffsetFactor: 2,
           polygonOffsetUnits: 2,
         });
-        for (const poly of g.sidewalkPolys) {
-          const mesh = meshFromRing(poly, 0.03, swMat, {
-            kind: 'user-road-sidewalk',
+        for (const poly of polys) {
+          const mesh = meshFromRing(poly, y, mat, {
+            kind,
             roadId: g.id,
             nonPickable: true,
           });
           if (mesh) group.add(mesh);
         }
-      }
+      };
+
+      addStrips(g.greenPolys, '#3d5c3a', 0.03, 'user-road-green');
+      addStrips(g.parkingPolys, '#3a3a38', 0.04, 'user-road-parking');
+      addStrips(g.sidewalkPolys, '#4a4846', 0.045, 'user-road-sidewalk');
 
       const asphaltMat = new THREE.MeshStandardMaterial({
         color: g.profile.asphaltColor,
