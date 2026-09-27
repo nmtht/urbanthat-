@@ -8,8 +8,18 @@ import { ImportMapDialog } from './ui/ImportMapDialog';
 import { Toolbar, type ToolId } from './ui/Toolbar';
 import { SelectionBridge, type SelectedOsm } from './tools/SelectionBridge';
 import { ZoneBridge, ZoneMeshes } from './tools/ZoneBridge';
+import { RoadBridge } from './tools/RoadBridge';
+import { UserRoadsLayer } from './render/UserRoadsLayer';
 import type { ZoneRect, ZoneType } from './domain/zones';
-import { CommandStack, DeleteOsmCommand, AddZoneCommand } from './state/commandStack';
+import type { RoadCenterline, RoadProfileId } from './domain/roads';
+import { ROAD_PROFILE_ORDER, ROAD_PROFILES } from './domain/roads';
+import {
+  CommandStack,
+  DeleteOsmCommand,
+  AddZoneCommand,
+  AddRoadCommand,
+  DeleteRoadCommand,
+} from './state/commandStack';
 import { StatusChip } from './ui/StatusChip';
 import { EmptyState } from './ui/EmptyState';
 import { ScenePanel, type OsmQuality } from './ui/ScenePanel';
@@ -247,6 +257,9 @@ export default function App() {
   const [tool, setTool] = useState<ToolId>('select');
   const [zones, setZones] = useState<ZoneRect[]>([]);
   const [zoneType, setZoneType] = useState<ZoneType>('residential');
+  const [userRoads, setUserRoads] = useState<RoadCenterline[]>([]);
+  const [roadProfile, setRoadProfile] = useState<RoadProfileId>('residential');
+  const [roadDraftPts, setRoadDraftPts] = useState<number | null>(null);
   const [selected, setSelected] = useState<SelectedOsm | null>(null);
   const [undoTick, setUndoTick] = useState(0);
   const cmdStack = useRef(new CommandStack());
@@ -324,6 +337,7 @@ export default function App() {
         setDialogOpen(false);
         setSelected(null);
         setZones([]);
+        setUserRoads([]);
         cmdStack.current.clear();
         setFacadeNightFactor(hour);
       } catch (err) {
@@ -346,7 +360,22 @@ export default function App() {
     if (lastBbox.current) handleImport(lastBbox.current);
   }, [handleImport]);
 
+  const userRoadsRef = useRef(userRoads);
+  userRoadsRef.current = userRoads;
+
   const performDelete = useCallback((sel: SelectedOsm) => {
+    if (sel.kind === 'user-road') {
+      const roadId = (sel.object.userData?.roadId as string | undefined)
+        ?? (sel.object.parent?.userData?.roadId as string | undefined);
+      if (roadId) {
+        const road = userRoadsRef.current.find((r) => r.id === roadId);
+        if (road) {
+          cmdStack.current.push(new DeleteRoadCommand(road, setUserRoads));
+        }
+      }
+      setSelected(null);
+      return;
+    }
     const targets = sel.objects?.length ? sel.objects : [sel.object];
     cmdStack.current.push(
       new DeleteOsmCommand(
@@ -373,29 +402,36 @@ export default function App() {
         setTool('delete');
         return;
       }
+      if (ev.key === 'r' || ev.key === 'R') {
+        if (!(ev.metaKey || ev.ctrlKey)) {
+          setTool('road');
+          return;
+        }
+      }
       if ((ev.key === 'z' || ev.key === 'Z') && !(ev.metaKey || ev.ctrlKey)) {
         setTool('zone');
         return;
       }
-      if (ev.key === '1') {
-        setZoneType('residential');
-        setTool('zone');
-        return;
-      }
-      if (ev.key === '2') {
-        setZoneType('commercial');
-        setTool('zone');
-        return;
-      }
-      if (ev.key === '3') {
-        setZoneType('industrial');
-        setTool('zone');
-        return;
-      }
-      if (ev.key === '4') {
-        setZoneType('park');
-        setTool('zone');
-        return;
+      if (ev.key === '1' || ev.key === '2' || ev.key === '3' || ev.key === '4' || ev.key === '5') {
+        const n = parseInt(ev.key, 10);
+        if (tool === 'road') {
+          const pid = ROAD_PROFILE_ORDER[n - 1];
+          if (pid) setRoadProfile(pid);
+          return;
+        }
+        if (tool === 'zone' || tool !== 'road') {
+          const zmap: Record<string, ZoneType> = {
+            '1': 'residential',
+            '2': 'commercial',
+            '3': 'industrial',
+            '4': 'park',
+          };
+          if (zmap[ev.key]) {
+            setZoneType(zmap[ev.key]);
+            setTool('zone');
+          }
+          return;
+        }
       }
       if ((ev.key === 'z' || ev.key === 'Z') && (ev.metaKey || ev.ctrlKey)) {
         ev.preventDefault();
@@ -412,7 +448,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selected, performDelete]);
+  }, [selected, performDelete, tool]);
 
   useEffect(() => {
     if (!osm) return;
@@ -464,10 +500,18 @@ export default function App() {
         <group>{osm && <primitive object={osm.group} />}</group>
         {showGrid && <gridHelper args={[2000, 40, '#3a3a3c', '#2c2c2e']} position={[0, 0.02, 0]} />}
         <ZoneMeshes zones={zones} />
+        <UserRoadsLayer roads={userRoads} />
         <ZoneBridge
-          enabled={!!osm && tool === 'zone'}
+          enabled={tool === 'zone'}
           zoneType={zoneType}
           onCommit={(z) => cmdStack.current.push(new AddZoneCommand(z, setZones))}
+        />
+        <RoadBridge
+          enabled={tool === 'road'}
+          profileId={roadProfile}
+          existingRoads={userRoads}
+          onCommit={(r) => cmdStack.current.push(new AddRoadCommand(r, setUserRoads))}
+          onDraftChange={(pts) => setRoadDraftPts(pts ? pts.length : null)}
         />
         <OrbitControls
           makeDefault
@@ -479,10 +523,10 @@ export default function App() {
         />
         <CameraFit target={fitTarget} fitKey={fitKey} />
         <CameraYawReporter onYaw={onYaw} />
-        <PickBridge enabled={!!osm && (tool === 'select' || tool === 'delete')} onHover={handleHover} />
+        <PickBridge enabled={tool === 'select' || tool === 'delete'} onHover={handleHover} />
         <SelectionBridge
           tool={tool}
-          enabled={!!osm && (tool === 'select' || tool === 'delete')}
+          enabled={tool === 'select' || tool === 'delete'}
           selected={selected}
           onSelect={setSelected}
           onDeleteClick={performDelete}
@@ -533,6 +577,26 @@ export default function App() {
           <span style={hud.zoneHint}>drag · 1-4</span>
         </div>
       )}
+      {tool === 'road' && (
+        <div style={hud.zoneBar}>
+          {ROAD_PROFILE_ORDER.map((pid) => (
+            <button
+              key={pid}
+              type="button"
+              style={{ ...hud.zoneBtn, ...(roadProfile === pid ? hud.zoneBtnOn : null) }}
+              onClick={() => setRoadProfile(pid)}
+              title={ROAD_PROFILES[pid].label}
+            >
+              {ROAD_PROFILES[pid].label.slice(0, 3)}
+            </button>
+          ))}
+          <span style={hud.zoneHint}>
+            {roadDraftPts != null
+              ? `Road · ${roadDraftPts} pts · Enter`
+              : 'click · Enter · 1-5'}
+          </span>
+        </div>
+      )}
       {!osm && !loading && !dialogOpen && <EmptyState onImport={openImport} />}
 
       <ScenePanel
@@ -555,7 +619,7 @@ export default function App() {
       <NorthArrow visible={showNorth && !!osm} yawDeg={yawDeg} />
       <HoverHud info={hover.info} x={hover.x} y={hover.y} />
 
-      {osm && (
+      {(osm || userRoads.length > 0 || zones.length > 0) && (
         <div
           key={undoTick}
           style={hud.undo}
