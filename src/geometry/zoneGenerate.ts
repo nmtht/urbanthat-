@@ -1,8 +1,7 @@
 /**
  * Zone → GeneratedBuilding[] pipeline (Sprint 4).
- * Perimeter = continuous courtyard ring (4 bars along all edges);
- * tower = minimal footprint; random = non-overlapping + random height/rotation;
- * corridor; open.
+ * Perimeter = closed ring along polygon edges, strictly inside;
+ * tower / random / corridor / open.
  */
 
 import type { Point2D } from '../domain/SceneOrigin';
@@ -27,7 +26,6 @@ const MIN_FOOTPRINT: Record<string, { w: number; d: number }> = {
   boundary: { w: 0, d: 0 },
 };
 
-/** Mulberry32 — deterministic PRNG from seed. */
 function mulberry32(seed: number) {
   let t = seed >>> 0;
   return () => {
@@ -80,18 +78,15 @@ function pointInPoly(pt: Point2D, poly: Point2D[]): boolean {
   return inside;
 }
 
-/** Majority of footprint samples must lie inside the zone polygon. */
+/** All corners + centroid must be inside (strict containment). */
 function footprintInside(fp: Point2D[], poly: Point2D[]): boolean {
   if (fp.length < 3) return false;
-  let inside = 0;
   for (const p of fp) {
-    if (pointInPoly(p, poly)) inside++;
+    if (!pointInPoly(p, poly)) return false;
   }
   let cx = 0, cy = 0;
   for (const p of fp) { cx += p.x; cy += p.y; }
-  cx /= fp.length; cy /= fp.length;
-  if (pointInPoly({ x: cx, y: cy }, poly)) inside++;
-  return inside >= Math.ceil((fp.length + 1) * 0.6);
+  return pointInPoly({ x: cx / fp.length, y: cy / fp.length }, poly);
 }
 
 function aabbOf(fp: Point2D[]): { minX: number; maxX: number; minY: number; maxY: number } {
@@ -140,33 +135,56 @@ interface ParcelCell {
   cx: number; cy: number; w: number; d: number; parcelArea: number; rot?: number;
 }
 
-/** Continuous perimeter ring along ALL four edges. */
+/**
+ * Closed perimeter ring strictly inside the zone.
+ * Long bars full-span; short bars only the gap between them — no outward corner stubs.
+ */
 function parcelizePerimeter(
+  poly: Point2D[],
   box: { minX: number; maxX: number; minY: number; maxY: number },
   parcelDepthM: number, coverage: number, minW: number, minD: number
 ): ParcelCell[] {
-  const W = box.maxX - box.minX, D = box.maxY - box.minY, area = W * D;
+  const W = box.maxX - box.minX, D = box.maxY - box.minY, area = Math.max(1, W * D);
   if (W < 10 || D < 10) return [];
-  const maxDepthForSides = Math.max(minD * 0.85, (Math.min(W, D) - Math.max(minW, 6)) / 2);
-  let depth = Math.min(parcelDepthM, Math.min(W, D) * 0.32, maxDepthForSides);
+
+  const maxDepth = Math.min(W, D) * 0.28;
+  let depth = Math.min(parcelDepthM, maxDepth, Math.max(minD, 8));
   depth = Math.max(minD * 0.7, depth);
-  if (W < depth * 2 + 5 || D < depth * 2 + 5) {
-    return [{ cx: (box.minX + box.maxX) / 2, cy: (box.minY + box.maxY) / 2, w: W * 0.94, d: D * 0.94, parcelArea: area }];
+
+  if (W < depth * 2 + 8 || D < depth * 2 + 8) {
+    const m = 0.6;
+    return [{
+      cx: (box.minX + box.maxX) / 2, cy: (box.minY + box.maxY) / 2,
+      w: Math.max(minW, W - 2 * m), d: Math.max(minD, D - 2 * m), parcelArea: area,
+    }];
   }
-  const pad = 0.25;
-  const x0 = box.minX + pad, x1 = box.maxX - pad, y0 = box.minY + pad, y1 = box.maxY - pad;
+
+  // Extra pad inside setback box so massing never clips the zone edge
+  const pad = 0.75;
+  const x0 = box.minX + pad, x1 = box.maxX - pad;
+  const y0 = box.minY + pad, y1 = box.maxY - pad;
   const innerW = x1 - x0, innerD = y1 - y0;
-  const ringAreaApprox = 2 * (innerW + innerD) * depth - 4 * depth * depth;
-  const covScale = Math.min(1.2, Math.max(0.5, (coverage * area) / Math.max(1, ringAreaApprox)));
-  let dUse = Math.max(minD * 0.75, Math.min(depth, depth * Math.sqrt(covScale)));
-  const maxD2 = (Math.min(innerW, innerD) - Math.max(minW, 6)) / 2;
-  dUse = Math.min(dUse, Math.max(minD * 0.7, maxD2));
+  if (innerW < depth * 2 + 4 || innerD < depth * 2 + 4) {
+    return [{
+      cx: (x0 + x1) / 2, cy: (y0 + y1) / 2,
+      w: innerW * 0.95, d: innerD * 0.95, parcelArea: area,
+    }];
+  }
+
+  const ringApprox = 2 * (innerW + innerD) * depth - 4 * depth * depth;
+  const covScale = Math.min(1, Math.max(0.45, (coverage * area) / Math.max(1, ringApprox)));
+  const dUse = Math.max(minD * 0.7, Math.min(depth, depth * Math.sqrt(covScale)));
+
   const cells: ParcelCell[] = [];
+  // South / North — full inner width
   cells.push({ cx: (x0 + x1) / 2, cy: y0 + dUse / 2, w: innerW, d: dUse, parcelArea: area / 4 });
   cells.push({ cx: (x0 + x1) / 2, cy: y1 - dUse / 2, w: innerW, d: dUse, parcelArea: area / 4 });
-  const sideLen = Math.max(minW * 0.85, innerD - 2 * dUse);
-  cells.push({ cx: x0 + dUse / 2, cy: (y0 + y1) / 2, w: dUse, d: sideLen, parcelArea: area / 4 });
-  cells.push({ cx: x1 - dUse / 2, cy: (y0 + y1) / 2, w: dUse, d: sideLen, parcelArea: area / 4 });
+  // West / East — only the gap between N and S (no corner stubs past the long bars)
+  const sideLen = innerD - 2 * dUse;
+  if (sideLen >= minW * 0.5) {
+    cells.push({ cx: x0 + dUse / 2, cy: (y0 + y1) / 2, w: dUse, d: sideLen, parcelArea: area / 4 });
+    cells.push({ cx: x1 - dUse / 2, cy: (y0 + y1) / 2, w: dUse, d: sideLen, parcelArea: area / 4 });
+  }
   return cells;
 }
 
@@ -222,9 +240,9 @@ function parcelizeCorridor(
   const alongX = W >= D;
   const depth = Math.min(parcelDepthM, (alongX ? D : W) * 0.7);
   if (alongX) {
-    return [{ cx: (box.minX + box.maxX) / 2, cy: (box.minY + box.maxY) / 2, w: W * 0.95, d: Math.max(minW, depth * Math.sqrt(coverage)), parcelArea: W * D }];
+    return [{ cx: (box.minX + box.maxX) / 2, cy: (box.minY + box.maxY) / 2, w: W * 0.92, d: Math.max(minW, depth * Math.sqrt(coverage)), parcelArea: W * D }];
   }
-  return [{ cx: (box.minX + box.maxX) / 2, cy: (box.minY + box.maxY) / 2, w: Math.max(minW, depth * Math.sqrt(coverage)), d: D * 0.95, parcelArea: W * D }];
+  return [{ cx: (box.minX + box.maxX) / 2, cy: (box.minY + box.maxY) / 2, w: Math.max(minW, depth * Math.sqrt(coverage)), d: D * 0.92, parcelArea: W * D }];
 }
 
 export interface GenerateOptions {
@@ -237,36 +255,46 @@ export function generateBuildingsForZone(
   if (zone.type === 'boundary' || zone.type === 'park') return [];
   const params = resolveZoneParams(zone);
   if (params.buildForm === 'open' || params.coverage <= 0 || params.far <= 0) return [];
+
   const poly = zonePolygon(zone);
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (const p of poly) {
     minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
     minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
   }
-  const inset = insetBBox(minX, maxX, minY, maxY, params.setbackM);
+
+  // Effective setback never below 1.5 m so massing stays clear of the boundary line
+  const setback = Math.max(params.setbackM, 1.5);
+  const inset = insetBBox(minX, maxX, minY, maxY, setback);
   if (!inset) return [];
+
   const rng = mulberry32(params.seed);
   const min = MIN_FOOTPRINT[zone.type] ?? MIN_FOOTPRINT.residential;
+
   let cells: ParcelCell[] = [];
   switch (params.buildForm) {
     case 'tower': cells = parcelizeTower(inset, params.coverage, min.w, rng); break;
     case 'random': cells = parcelizeRandom(inset, poly, params.coverage, min.w, min.d, rng); break;
     case 'corridor': cells = parcelizeCorridor(inset, params.parcelDepthM, params.coverage, min.w); break;
     case 'block':
-    default: cells = parcelizePerimeter(inset, params.parcelDepthM, params.coverage, min.w, min.d); break;
+    default: cells = parcelizePerimeter(poly, inset, params.parcelDepthM, params.coverage, min.w, min.d); break;
   }
+
   const out: GeneratedBuilding[] = [];
   for (let i = 0; i < cells.length; i++) {
     const cell = cells[i];
     const rot = cell.rot ?? 0;
     let fp = rectFootprint(cell.cx, cell.cy, cell.w, cell.d, rot);
     let fpA = footprintArea(fp);
-    if (fpA < min.w * min.d * 0.25) continue;
-    if (params.buildForm !== 'block' && !footprintInside(fp, poly)) {
-      fp = rectFootprint(cell.cx, cell.cy, cell.w * 0.9, cell.d * 0.9, rot);
+    if (fpA < min.w * min.d * 0.2) continue;
+
+    // Strict containment for ALL forms
+    if (!footprintInside(fp, poly)) {
+      fp = rectFootprint(cell.cx, cell.cy, cell.w * 0.88, cell.d * 0.88, rot);
       fpA = footprintArea(fp);
       if (!footprintInside(fp, poly)) continue;
     }
+
     let { heightM, floors } = heightFromFar(params.far, cell.parcelArea, fpA, params.maxFloors, FLOOR_HEIGHT_M);
     if (params.buildForm === 'random') {
       const factor = 0.55 + rng() * 0.9;
@@ -277,7 +305,10 @@ export function generateBuildingsForZone(
       floors = Math.max(floors, Math.min(params.maxFloors, Math.max(4, Math.round(params.maxFloors * 0.85))));
       heightM = floors * FLOOR_HEIGHT_M;
     }
-    out.push({ id: uid(zone.id, i, params.seed), zoneId: zone.id, footprint: fp, heightM, floors, type: zone.type, buildForm: params.buildForm });
+    out.push({
+      id: uid(zone.id, i, params.seed), zoneId: zone.id, footprint: fp,
+      heightM, floors, type: zone.type, buildForm: params.buildForm,
+    });
   }
   return out;
 }
