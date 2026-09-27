@@ -261,6 +261,8 @@ function addPolygonMeshes(
     clippedHoles.length ? clippedHoles : undefined
   );
   if (!mesh) return false;
+  mesh.userData.localRing = clipped;
+  mesh.userData.localHoles = clippedHoles;
   group.add(mesh);
   return true;
 }
@@ -559,14 +561,23 @@ export function buildOsmContextLayer(
     if (!(child instanceof THREE.Mesh)) continue;
     const mat = child.material as THREE.MeshStandardMaterial;
     if (!mat?.color || mat.color.getHexString() !== '2f5f7a') continue;
-    const box = new THREE.Box3().setFromObject(child);
+    const ring = child.userData.localRing as Point2D[] | undefined;
+    const holes = (child.userData.localHoles as Point2D[][] | undefined) ?? [];
     let inside = 0;
     for (const c of buildingCentroids) {
-      const wx = c.x;
-      const wz = -c.y;
-      if (wx >= box.min.x && wx <= box.max.x && wz >= box.min.z && wz <= box.max.z) {
-        inside++;
+      let hit: boolean;
+      if (ring) {
+        // Actual polygon containment (holes carved out), not the bounding box —
+        // an elongated/rotated river's AABB is much larger than its real shape
+        // and was flagging unrelated buildings as "flooded".
+        hit = pointInPoly(c.x, c.y, ring) && !holes.some((h) => pointInPoly(c.x, c.y, h));
+      } else {
+        const box = new THREE.Box3().setFromObject(child);
+        const wx = c.x;
+        const wz = -c.y;
+        hit = wx >= box.min.x && wx <= box.max.x && wz >= box.min.z && wz <= box.max.z;
       }
+      if (hit) inside++;
     }
     if (buildingCentroids.length > 0 && inside / buildingCentroids.length > 0.12) {
       toRemove.push(child);
@@ -622,39 +633,36 @@ export function buildOsmContextLayer(
     const trunkGeom = new THREE.CylinderGeometry(0.15, 0.22, 1.2, 5);
     const crownGeom = new THREE.SphereGeometry(1.4, 6, 5);
     const trunkMat = new THREE.MeshStandardMaterial({ color: '#4a3728', roughness: 1 });
-    const crownMat = new THREE.MeshStandardMaterial({ color: '#2d5a34', roughness: 0.9 });
-    const trunks = new THREE.InstancedMesh(trunkGeom, trunkMat, treeCount);
-    const crowns = new THREE.InstancedMesh(crownGeom, crownMat, treeCount);
-    const m = new THREE.Matrix4();
-    const q = new THREE.Quaternion();
-    const s = new THREE.Vector3();
+    const crownMat = new THREE.MeshStandardMaterial({ color: '#2d5a32', roughness: 0.85 });
     for (let i = 0; i < treeCount; i++) {
-      const p = treePositions[i];
-      const scale = 0.7 + (i % 5) * 0.12;
-      s.set(scale, scale, scale);
-      m.compose(new THREE.Vector3(p.x, 0.6 * scale, p.z), q, s);
-      trunks.setMatrixAt(i, m);
-      m.compose(new THREE.Vector3(p.x, 1.8 * scale, p.z), q, s);
-      crowns.setMatrixAt(i, m);
+      const pos = treePositions[i];
+      const trunk = new THREE.Mesh(trunkGeom, trunkMat);
+      trunk.position.set(pos.x, 0.6, pos.z);
+      trunk.userData.kind = 'tree';
+      trunk.userData.nonPickable = true;
+      group.add(trunk);
+      const crown = new THREE.Mesh(crownGeom, crownMat);
+      crown.position.set(pos.x, 2.2, pos.z);
+      crown.userData.kind = 'tree';
+      crown.userData.nonPickable = true;
+      group.add(crown);
     }
-    trunks.userData.nonPickable = true;
-    trunks.userData.kind = 'tree';
-    crowns.userData.nonPickable = true;
-    crowns.userData.kind = 'tree';
-    group.add(trunks);
-    group.add(crowns);
   }
 
-  return { group, buildingCount, roadCount, waterCount, greenCount, treeCount, clipRect };
+  return {
+    group,
+    buildingCount,
+    roadCount,
+    waterCount,
+    greenCount,
+    treeCount,
+    clipRect,
+  };
 }
 
 export function disposeOsmContextLayer(group: THREE.Group): void {
   group.traverse((obj) => {
-    if (
-      obj instanceof THREE.Mesh ||
-      obj instanceof THREE.LineSegments ||
-      obj instanceof THREE.InstancedMesh
-    ) {
+    if (obj instanceof THREE.Mesh || obj instanceof THREE.LineSegments) {
       obj.geometry?.dispose();
       const mat = obj.material;
       if (Array.isArray(mat)) mat.forEach((x) => x.dispose());
