@@ -159,7 +159,7 @@ function labelFromTags(kind: string, tags: Record<string, string>): HoverInfo {
       detail: tags.name ? type : tags['building:levels'] ? `${tags['building:levels']} levels` : undefined,
     };
   }
-  if (kind === 'road') {
+  if (kind === 'road' || kind === 'user-road') {
     return {
       kind: 'road',
       label: tags.name ?? tags.highway ?? 'road',
@@ -490,7 +490,7 @@ export default function App() {
       <Canvas
         camera={{ position: [80, 60, 80], fov: 45, near: 0.5, far: 80_000 }}
         gl={{ antialias: true, alpha: false }}
-        style={{ background: '#1c1c1e' }}
+        style={{ background: '#c5d6ea' }}
         onCreated={({ gl }) => {
           gl.setClearColor('#c5d6ea');
           gl.toneMapping = THREE.ACESFilmicToneMapping;
