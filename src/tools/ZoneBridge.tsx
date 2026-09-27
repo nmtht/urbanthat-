@@ -389,13 +389,19 @@ export function ZoneMeshes({ zones }: { zones: ZoneRect[] }) {
               key={z.id}
               rotation={[-Math.PI / 2, 0, 0]}
               position={[0, 0.025, 0]}
-              userData={{ kind: 'zone', zoneId: z.id, zoneType: z.type, nonPickable: true }}
+              userData={{
+                kind: 'zone',
+                zoneId: z.id,
+                zoneType: z.type,
+                nonPickable: false,
+                osmTags: { name: z.name || z.type, landuse: z.type },
+              }}
             >
               <shapeGeometry args={[shape]} />
               <meshBasicMaterial
                 color={ZONE_COLORS[z.type]}
                 transparent
-                opacity={0.28}
+                opacity={z.type === 'boundary' ? 0.12 : 0.28}
                 depthWrite={false}
                 side={THREE.DoubleSide}
               />
@@ -410,13 +416,19 @@ export function ZoneMeshes({ zones }: { zones: ZoneRect[] }) {
             rotation={[-Math.PI / 2, 0, 0]}
             position={[(z.minX + z.maxX) / 2, 0.025, -(z.minY + z.maxY) / 2]}
             scale={[w, 1, h]}
-            userData={{ kind: 'zone', zoneId: z.id, zoneType: z.type, nonPickable: true }}
+            userData={{
+              kind: 'zone',
+              zoneId: z.id,
+              zoneType: z.type,
+              nonPickable: false,
+              osmTags: { name: z.name || z.type, landuse: z.type },
+            }}
           >
             <planeGeometry args={[1, 1]} />
             <meshBasicMaterial
               color={ZONE_COLORS[z.type]}
               transparent
-              opacity={0.28}
+              opacity={z.type === 'boundary' ? 0.12 : 0.28}
               depthWrite={false}
             />
           </mesh>
