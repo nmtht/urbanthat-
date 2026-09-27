@@ -105,7 +105,7 @@ function makeSurfaceTexture(kind: string): THREE.CanvasTexture {
   ctx.fillStyle = '#e8e4dc';
   ctx.fillRect(0, 0, 64, 64);
   if (kind === 'panel') {
-    ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.12)';
     for (let i = 0; i < 64; i += 16) {
       ctx.beginPath();
       ctx.moveTo(i, 0);
@@ -114,12 +114,12 @@ function makeSurfaceTexture(kind: string): THREE.CanvasTexture {
     }
   } else if (kind === 'metal') {
     for (let y = 0; y < 64; y += 2) {
-      ctx.fillStyle = y % 4 === 0 ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.03)';
+      ctx.fillStyle = y % 4 === 0 ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.04)';
       ctx.fillRect(0, y, 64, 2);
     }
   } else {
     for (let i = 0; i < 200; i++) {
-      ctx.fillStyle = `rgba(0,0,0,${0.02 + Math.random() * 0.04})`;
+      ctx.fillStyle = `rgba(0,0,0,${0.02 + Math.random() * 0.05})`;
       ctx.fillRect(Math.random() * 64, Math.random() * 64, 1, 1);
     }
   }
@@ -129,6 +129,14 @@ function makeSurfaceTexture(kind: string): THREE.CanvasTexture {
   surfaceTexCache.set(kind, tex);
   return tex;
 }
+
+const VERT_COMMON = `#include <common>
+varying vec3 vWPos;
+varying vec3 vWNormal;`;
+
+const VERT_BEGIN = `#include <begin_vertex>
+vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+vWNormal = normalize(mat3(modelMatrix) * objectNormal);`;
 
 export function getFacadeMaterial(
   style: FacadeStyle,
@@ -164,31 +172,28 @@ export function getFacadeMaterial(
       shader.uniforms.uFloorH = { value: floorH };
       mat.userData.shader = shader;
       shader.vertexShader = shader.vertexShader
-        .replace(
-          '#include <common>',
-          `#include <common>
-varying float vFloorY;`
-        )
-        .replace(
-          '#include <begin_vertex>',
-          `#include <begin_vertex>
-vFloorY = position.y;`
-        );
+        .replace('#include <common>', VERT_COMMON)
+        .replace('#include <begin_vertex>', VERT_BEGIN);
       shader.fragmentShader = shader.fragmentShader
         .replace(
           '#include <common>',
           `#include <common>
 uniform float uFloorH;
-varying float vFloorY;`
+varying vec3 vWPos;
+varying vec3 vWNormal;`
         )
         .replace(
           '#include <color_fragment>',
           `#include <color_fragment>
 {
-  float band = fract(vFloorY / uFloorH);
-  float line = smoothstep(0.92, 1.0, band);
-  diffuseColor.rgb *= 1.0 - line * 0.18;
-}`
+  float wall = 1.0 - abs(vWNormal.y);
+  float band = fract(vWPos.y / max(uFloorH, 0.5));
+  float line = smoothstep(0.88, 0.98, band) * smoothstep(0.25, 0.55, wall);
+  diffuseColor.rgb *= 1.0 - line * 0.42;
+  float storey = step(0.5, band);
+  diffuseColor.rgb *= mix(1.0, 0.92, storey * wall);
+}
+`
         );
     };
     mat.customProgramCacheKey = () => key;
@@ -196,9 +201,8 @@ varying float vFloorY;`
     return mat;
   }
 
-  // high — full facades, windows, night emissive
   mat = new THREE.MeshStandardMaterial({
-    color: '#ffffff',
+    color: '#d8d2c8',
     map: makeSurfaceTexture(p.surface),
     roughness: p.roughness,
     metalness: p.metalness,
@@ -219,18 +223,8 @@ varying float vFloorY;`
     mat.userData.shader = shader;
 
     shader.vertexShader = shader.vertexShader
-      .replace(
-        '#include <common>',
-        `#include <common>
-varying vec3 vWPos;
-varying vec3 vWNormal;`
-      )
-      .replace(
-        '#include <begin_vertex>',
-        `#include <begin_vertex>
-vWPos = (modelMatrix * vec4(position, 1.0)).xyz;
-vWNormal = normalize(mat3(modelMatrix) * normal);`
-      );
+      .replace('#include <common>', VERT_COMMON)
+      .replace('#include <begin_vertex>', VERT_BEGIN);
 
     shader.fragmentShader = shader.fragmentShader
       .replace(
@@ -249,18 +243,20 @@ float winMask = 0.0;`
         '#include <color_fragment>',
         `#include <color_fragment>
 {
-  float vert = abs(vWNormal.y);
-  vec3 tangent = normalize(cross(vWNormal, vec3(0.0, 1.0, 0.0)));
-  if (length(tangent) < 0.1) tangent = vec3(1.0, 0.0, 0.0);
-  float along = dot(vWPos, tangent);
+  float wall = 1.0 - abs(vWNormal.y);
+  wall = smoothstep(0.35, 0.75, wall);
   float h = vWPos.y;
-  if (h > 0.4 && h < uHeight - 0.25) {
-    float cellX = fract(along / uWinW);
-    float cellY = fract(h / uFloorH);
-    float wx = step(0.18, cellX) * step(cellX, 0.82);
-    float wy = step(0.22, cellY) * step(cellY, 0.82);
-    winMask = wx * wy * smoothstep(0.55, 0.75, vert);
-    diffuseColor.rgb = mix(diffuseColor.rgb, uGlass, winMask * 0.92);
+  if (h > 0.5 && h < uHeight - 0.3 && wall > 0.01) {
+    vec3 up = vec3(0.0, 1.0, 0.0);
+    vec3 tangent = normalize(cross(vWNormal, up));
+    if (length(tangent) < 0.1) tangent = vec3(1.0, 0.0, 0.0);
+    float along = dot(vWPos, tangent);
+    float cellX = fract(along / max(uWinW, 0.5));
+    float cellY = fract(h / max(uFloorH, 0.5));
+    float wx = step(0.15, cellX) * step(cellX, 0.85);
+    float wy = step(0.18, cellY) * step(cellY, 0.82);
+    winMask = wx * wy * wall;
+    diffuseColor.rgb = mix(diffuseColor.rgb, uGlass, winMask * 0.88);
   }
 }
 `
@@ -268,7 +264,7 @@ float winMask = 0.0;`
       .replace(
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
-totalEmissiveRadiance += vec3(1.0, 0.72, 0.35) * winMask * uNight * 1.4;
+totalEmissiveRadiance += vec3(1.0, 0.72, 0.35) * winMask * uNight * 1.5;
 `
       );
   };
@@ -298,7 +294,7 @@ export function setFacadeNightFactor(hour: number): void {
     if (shader?.uniforms?.uNight) {
       shader.uniforms.uNight.value = night;
     }
-    mat.emissiveIntensity = night * 0.15;
+    mat.emissiveIntensity = night * 0.12;
   }
 }
 
@@ -345,4 +341,34 @@ export function facadeRepeat(
     repU: Math.max(1, frontage / p.winW),
     repV: Math.max(1, heightM / p.floorH),
   };
+}
+
+/** Re-assign wall materials + toggle trees/lamps when quality changes. */
+export function applyQualityToOsmGroup(
+  group: THREE.Group,
+  quality: FacadeQuality
+): void {
+  group.traverse((obj) => {
+    const kind = obj.userData?.kind as string | undefined;
+    if (kind === 'tree') {
+      obj.visible = quality === 'high';
+      return;
+    }
+    if (obj.name === 'StreetLamps') {
+      obj.visible = quality === 'high';
+      return;
+    }
+    if (obj instanceof THREE.Light && obj.userData?.kind === 'street-lamp-light') {
+      obj.visible = quality === 'high';
+      return;
+    }
+    if (obj instanceof THREE.Mesh && obj.name === 'building-wall') {
+      const style = (obj.userData.facadeStyle as FacadeStyle) || 'generic';
+      const height = (obj.userData.buildingHeight as number) || 9;
+      const peri = (obj.userData.perimeter as number) || 20;
+      obj.material = getFacadeMaterial(style, peri * 0.35, height, quality);
+    }
+  });
+  const lamps = group.getObjectByName('StreetLamps');
+  if (lamps) lamps.visible = quality === 'high';
 }
