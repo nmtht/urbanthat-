@@ -22,6 +22,8 @@ import {
 import { StatusChip } from './ui/StatusChip';
 import { EmptyState } from './ui/EmptyState';
 import { ScenePanel, type OsmQuality } from './ui/ScenePanel';
+import { InspectorPanel, type InspectorTarget } from './ui/InspectorPanel';
+import { computeSceneStats } from './domain/stats';
 import { HoverHud, type HoverInfo } from './ui/HoverHud';
 import { NorthArrow } from './ui/NorthArrow';
 import {
@@ -164,6 +166,9 @@ function labelFromTags(kind: string, tags: Record<string, string>): HoverInfo {
       label: tags.name ?? tags.highway ?? 'road',
       detail: tags.name ? tags.highway : tags.lanes ? `${tags.lanes} lanes` : undefined,
     };
+  }
+  if (kind === 'zone') {
+    return { kind: 'other', label: tags.name ?? tags.landuse ?? 'zone' };
   }
   return { kind: 'other', label: kind };
 }
@@ -367,18 +372,25 @@ export default function App() {
 
   const userRoadsRef = useRef(userRoads);
   userRoadsRef.current = userRoads;
+  const zonesRef = useRef(zones);
+  zonesRef.current = zones;
 
   const performDelete = useCallback((sel: SelectedOsm) => {
     if (sel.kind === 'user-road') {
       const roadId =
+        sel.roadId ??
         (sel.object.userData?.roadId as string | undefined) ??
         (sel.object.parent?.userData?.roadId as string | undefined);
       if (roadId) {
         const road = userRoadsRef.current.find((r) => r.id === roadId);
-        if (road) {
-          cmdStack.current.push(new DeleteRoadCommand(road, setUserRoads));
-        }
+        if (road) cmdStack.current.push(new DeleteRoadCommand(road, setUserRoads));
       }
+      setSelected(null);
+      return;
+    }
+    if (sel.kind === 'zone') {
+      const zoneId = sel.zoneId ?? (sel.object.userData?.zoneId as string | undefined);
+      if (zoneId) setZones((prev) => prev.filter((z) => z.id !== zoneId));
       setSelected(null);
       return;
     }
@@ -425,19 +437,18 @@ export default function App() {
           if (pid) setRoadProfile(pid);
           return;
         }
-        if (tool === 'zone' || tool !== 'road') {
-          const zmap: Record<string, ZoneType> = {
-            '1': 'residential',
-            '2': 'commercial',
-            '3': 'industrial',
-            '4': 'park',
-          };
-          if (zmap[ev.key]) {
-            setZoneType(zmap[ev.key]);
-            setTool('zone');
-          }
-          return;
+        const zmap: Record<string, ZoneType> = {
+          '1': 'residential',
+          '2': 'commercial',
+          '3': 'industrial',
+          '4': 'park',
+          '5': 'boundary',
+        };
+        if (zmap[ev.key]) {
+          setZoneType(zmap[ev.key]);
+          setTool('zone');
         }
+        return;
       }
       if ((ev.key === 'z' || ev.key === 'Z') && (ev.metaKey || ev.ctrlKey)) {
         ev.preventDefault();
@@ -483,6 +494,27 @@ export default function App() {
     const radius = Math.max(size.x, size.z, 40) * 0.5;
     return { x: center.x, z: center.z, radius };
   }, [osm]);
+
+  const inspectorTarget: InspectorTarget | null = useMemo(() => {
+    if (!selected) return null;
+    if (selected.kind === 'user-road') {
+      const id = selected.roadId ?? (selected.object.userData?.roadId as string | undefined);
+      const road = userRoads.find((r) => r.id === id);
+      if (road) return { kind: 'user-road', road };
+    }
+    if (selected.kind === 'zone') {
+      const id = selected.zoneId ?? (selected.object.userData?.zoneId as string | undefined);
+      const zone = zones.find((z) => z.id === id);
+      if (zone) return { kind: 'zone', zone };
+    }
+    if (selected.kind === 'building' || selected.kind === 'road') {
+      const tags = (selected.object.userData?.osmTags ?? {}) as Record<string, string>;
+      return { kind: 'osm', label: selected.label, osmKind: selected.kind, tags };
+    }
+    return null;
+  }, [selected, userRoads, zones]);
+
+  const sceneStats = useMemo(() => computeSceneStats(userRoads, zones), [userRoads, zones]);
 
   const openImport = () => {
     setError(null);
@@ -539,7 +571,10 @@ export default function App() {
           tool={tool}
           enabled={tool === 'select' || tool === 'delete'}
           selected={selected}
-          onSelect={setSelected}
+          onSelect={(sel) => {
+            setSelected(sel);
+            if (sel) setSceneOpen(false);
+          }}
           onDeleteClick={performDelete}
         />
       </Canvas>
@@ -566,7 +601,15 @@ export default function App() {
               Refresh
             </button>
           )}
-          <button type="button" style={hud.btn} onClick={() => setSceneOpen((v) => !v)} title="Scene settings">
+          <button
+            type="button"
+            style={hud.btn}
+            onClick={() => {
+              setSelected(null);
+              setSceneOpen((v) => !v);
+            }}
+            title="Scene settings"
+          >
             Scene
           </button>
         </div>
@@ -577,16 +620,18 @@ export default function App() {
       {tool === 'zone' && (
         <div style={hud.toolPanel}>
           <div style={hud.zoneBar}>
-            {(['residential', 'commercial', 'industrial', 'park'] as ZoneType[]).map((zt) => (
-              <button
-                key={zt}
-                type="button"
-                style={{ ...hud.zoneBtn, ...(zoneType === zt ? hud.zoneBtnOn : null) }}
-                onClick={() => setZoneType(zt)}
-              >
-                {zt.slice(0, 3)}
-              </button>
-            ))}
+            {(['residential', 'commercial', 'industrial', 'park', 'boundary'] as ZoneType[]).map(
+              (zt) => (
+                <button
+                  key={zt}
+                  type="button"
+                  style={{ ...hud.zoneBtn, ...(zoneType === zt ? hud.zoneBtnOn : null) }}
+                  onClick={() => setZoneType(zt)}
+                >
+                  {zt === 'boundary' ? 'Bnd' : zt.slice(0, 3)}
+                </button>
+              )
+            )}
             <span style={hud.sep} />
             {(
               [
@@ -720,7 +765,7 @@ export default function App() {
       )}
 
       <ScenePanel
-        open={sceneOpen}
+        open={sceneOpen && !inspectorTarget}
         onClose={() => setSceneOpen(false)}
         hour={hour}
         onHour={setHour}
@@ -734,6 +779,23 @@ export default function App() {
         onShowNorth={setShowNorth}
         units={units}
         onUnits={setUnits}
+        stats={sceneStats}
+      />
+
+      <InspectorPanel
+        target={inspectorTarget}
+        units={units}
+        onClose={() => setSelected(null)}
+        onUpdateRoad={(id, patch) => {
+          setUserRoads((prev) =>
+            prev.map((r) =>
+              r.id === id ? { ...r, ...patch, options: patch.options ?? r.options } : r
+            )
+          );
+        }}
+        onUpdateZone={(id, patch) => {
+          setZones((prev) => prev.map((z) => (z.id === id ? { ...z, ...patch } : z)));
+        }}
       />
 
       <NorthArrow visible={showNorth && !!osm} yawDeg={yawDeg} />
@@ -750,7 +812,7 @@ export default function App() {
           }
         >
           {'\u2304'} {cmdStack.current.undoCount}
-          {selected ? ` \u00b7 ${selected.label}` : ''}
+          {selected ? ` · ${selected.label}` : ''}
         </div>
       )}
 
