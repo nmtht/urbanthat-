@@ -30,16 +30,60 @@ import { generateBuildingsForZone } from './geometry/zoneGenerate';
 export default function App() {
   const c = useAppController();
   const {
-    dialogOpen, setDialogOpen, startedEmpty, loading, error, osm, tool, setTool,
-    zones, setZones, generatedBuildings, setGeneratedBuildings, zoneType,
-    userRoads, setUserRoads, roadProfile, roadOptions, roadDrawMode, zoneDrawMode,
-    drawingActive, selected, setSelected, undoTick, cmdStack,
-    hour, setHour, sceneOpen, setSceneOpen, quality, setQuality, fogAmount, setFogAmount,
-    showGrid, setShowGrid, showNorth, setShowNorth, units, setUnits, hover,
-    yawDeg, handleHover, handleImport, performDelete,
-    fitKey, fitTarget, inspectorTarget, zoneGenStats, sceneStats, openImport,
-    zonesRef, buildingsRef,
+    dialogOpen,
+    setDialogOpen,
+    startedEmpty,
+    setStartedEmpty,
+    loading,
+    error,
+    osm,
+    tool,
+    setTool,
+    zones,
+    setZones,
+    generatedBuildings,
+    setGeneratedBuildings,
+    zoneType,
+    userRoads,
+    setUserRoads,
+    roadProfile,
+    roadOptions,
+    roadDrawMode,
+    zoneDrawMode,
+    drawingActive,
+    selected,
+    setSelected,
+    undoTick,
+    cmdStack,
+    hour,
+    setHour,
+    sceneOpen,
+    setSceneOpen,
+    quality,
+    setQuality,
+    fogAmount,
+    setFogAmount,
+    showGrid,
+    setShowGrid,
+    showNorth,
+    setShowNorth,
+    units,
+    setUnits,
+    hover,
+    yawDeg,
+    handleHover,
+    handleImport,
+    performDelete,
+    fitKey,
+    fitTarget,
+    inspectorTarget,
+    zoneGenStats,
+    sceneStats,
+    openImport,
+    zonesRef,
+    buildingsRef,
   } = c;
+
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
       <Canvas
@@ -54,7 +98,9 @@ export default function App() {
       >
         <Atmosphere hour={hour} fogAmount={fogAmount} />
         <group>{osm && <primitive object={osm.group} />}</group>
-        {showGrid && <gridHelper args={[2000, 40, '#3a3a3c', '#2c2c2e']} position={[0, 0.02, 0]} />}
+        {showGrid && (
+          <gridHelper args={[2000, 40, '#3a3a3c', '#2c2c2e']} position={[0, 0.02, 0]} />
+        )}
         <ZoneMeshes zones={zones} />
         <UserRoadsLayer roads={userRoads} quality={quality} hour={hour} />
         <UserBuildingsLayer buildings={generatedBuildings} quality={quality} />
