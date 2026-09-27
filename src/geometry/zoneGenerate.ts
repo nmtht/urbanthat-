@@ -1,7 +1,7 @@
 /**
  * Zone → GeneratedBuilding[] pipeline (Sprint 4).
- * Buildings must stay inside the zone polygon, never overlap.
- * block = perimeter courtyard along boundary.
+ * Buildings stay inside zone polygon, never overlap.
+ * block = continuous perimeter bars along edges (courtyard).
  */
 
 import type { Point2D } from '../domain/SceneOrigin';
@@ -78,7 +78,6 @@ function pointInPoly(p: Point2D, poly: Point2D[]): boolean {
   return inside;
 }
 
-/** True if every corner (and center) of the footprint is inside the polygon. */
 function footprintInside(fp: Point2D[], poly: Point2D[]): boolean {
   for (const p of fp) {
     if (!pointInPoly(p, poly)) return false;
@@ -139,13 +138,29 @@ function heightFromFar(
   return { heightM: floors * floorH, floors };
 }
 
-interface Cell {
-  cx: number;
-  cy: number;
-  w: number;
-  d: number;
-  rot: number;
-  parcelArea: number;
+function polyCentroid(poly: Point2D[]): Point2D {
+  let cx = 0,
+    cy = 0;
+  for (const p of poly) {
+    cx += p.x;
+    cy += p.y;
+  }
+  return { x: cx / poly.length, y: cy / poly.length };
+}
+
+function shrinkPoly(poly: Point2D[], insetM: number): Point2D[] | null {
+  const c = polyCentroid(poly);
+  let avgR = 0;
+  for (const p of poly) avgR += Math.hypot(p.x - c.x, p.y - c.y);
+  avgR /= poly.length;
+  if (avgR < insetM + 4) return null;
+  const scale = Math.max(0.15, 1 - insetM / avgR);
+  const out = poly.map((p) => ({
+    x: c.x + (p.x - c.x) * scale,
+    y: c.y + (p.y - c.y) * scale,
+  }));
+  if (footprintArea(out) < 20) return null;
+  return out;
 }
 
 function polyBBox(poly: Point2D[]) {
@@ -162,107 +177,93 @@ function polyBBox(poly: Point2D[]) {
   return { minX, maxX, minY, maxY };
 }
 
-/** Perimeter (block): buildings along each edge, depth toward interior → courtyard. */
+interface Cell {
+  cx: number;
+  cy: number;
+  w: number;
+  d: number;
+  rot: number;
+  parcelArea: number;
+  footprint?: Point2D[];
+}
+
+/** Continuous perimeter: one long bar per edge, minimal corner gaps. */
 function parcelizePerimeter(
   poly: Point2D[],
   parcelDepthM: number,
   coverage: number,
   minW: number,
   minD: number,
-  zoneArea: number
+  _zoneArea: number
 ): Cell[] {
   const cells: Cell[] = [];
-  const depth = Math.max(minD, Math.min(parcelDepthM, 18));
-  const frontW = Math.max(minW, Math.min(20, 14));
+  const depth = Math.max(minD, Math.min(parcelDepthM, 16));
+  const cornerGap = 1.2;
   const n = poly.length;
-
-  let cx = 0,
-    cy = 0;
-  for (const p of poly) {
-    cx += p.x;
-    cy += p.y;
-  }
-  cx /= n;
-  cy /= n;
+  const c = polyCentroid(poly);
 
   for (let i = 0; i < n; i++) {
     const a = poly[i];
     const b = poly[(i + 1) % n];
     const len = Math.hypot(b.x - a.x, b.y - a.y);
-    if (len < frontW * 0.8) continue;
+    if (len < minW + cornerGap * 2) continue;
+
     const tx = (b.x - a.x) / len;
     const ty = (b.y - a.y) / len;
     const mx = (a.x + b.x) / 2;
     const my = (a.y + b.y) / 2;
-    let nx = cx - mx;
-    let ny = cy - my;
+    let nx = c.x - mx;
+    let ny = c.y - my;
     const nl = Math.hypot(nx, ny) || 1;
     nx /= nl;
     ny /= nl;
 
-    const count = Math.max(1, Math.floor(len / frontW));
-    const unit = len / count;
-    for (let k = 0; k < count; k++) {
-      const t = (k + 0.5) / count;
-      const ex = a.x + (b.x - a.x) * t;
-      const ey = a.y + (b.y - a.y) * t;
-      const inset = 1.5 + depth / 2;
-      const px = ex + nx * inset;
-      const py = ey + ny * inset;
-      const w = Math.max(minW, unit * 0.88 * Math.sqrt(Math.min(1, coverage / 0.4)));
-      const d = Math.max(minD, depth * 0.9);
-      const rot = Math.atan2(ty, tx);
-      cells.push({
-        cx: px,
-        cy: py,
-        w,
-        d,
-        rot,
-        parcelArea: unit * depth,
-      });
-    }
-  }
+    const usable = len - cornerGap * 2;
+    const w = Math.max(minW, usable);
+    const d = Math.max(minD, depth * Math.min(1, 0.7 + coverage));
 
-  const maxByCov = Math.max(1, Math.round((zoneArea * coverage) / (frontW * depth * 0.7)));
-  if (cells.length > maxByCov) return cells.slice(0, maxByCov);
+    const sx = a.x + tx * cornerGap;
+    const sy = a.y + ty * cornerGap;
+    const ex = b.x - tx * cornerGap;
+    const ey = b.y - ty * cornerGap;
+    const outerInset = 0.8;
+    const ox = nx * outerInset;
+    const oy = ny * outerInset;
+    const ix = nx * (outerInset + d);
+    const iy = ny * (outerInset + d);
+
+    const fp: Point2D[] = [
+      { x: sx + ox, y: sy + oy },
+      { x: ex + ox, y: ey + oy },
+      { x: ex + ix, y: ey + iy },
+      { x: sx + ix, y: sy + iy },
+    ];
+
+    const cx = (sx + ex) / 2 + nx * (outerInset + d / 2);
+    const cy = (sy + ey) / 2 + ny * (outerInset + d / 2);
+    const rot = Math.atan2(ty, tx);
+
+    cells.push({ cx, cy, w, d, rot, parcelArea: w * d, footprint: fp });
+  }
   return cells;
 }
 
-/** Tower: single building, small footprint, max height from FAR. */
 function parcelizeTower(
   poly: Point2D[],
   coverage: number,
   minW: number,
   zoneArea: number
 ): Cell[] {
-  let cx = 0,
-    cy = 0;
-  for (const p of poly) {
-    cx += p.x;
-    cy += p.y;
-  }
-  cx /= poly.length;
-  cy /= poly.length;
-  if (!pointInPoly({ x: cx, y: cy }, poly)) {
+  let c = polyCentroid(poly);
+  if (!pointInPoly(c, poly)) {
     const bb = polyBBox(poly);
-    cx = (bb.minX + bb.maxX) / 2;
-    cy = (bb.minY + bb.maxY) / 2;
+    c = { x: (bb.minX + bb.maxX) / 2, y: (bb.minY + bb.maxY) / 2 };
   }
   const targetFp = Math.max(minW * minW, zoneArea * Math.min(0.15, Math.max(0.05, coverage)));
   const side = Math.max(minW, Math.sqrt(targetFp));
-  return [
-    {
-      cx,
-      cy,
-      w: side,
-      d: side * 0.85,
-      rot: 0,
-      parcelArea: zoneArea,
-    },
-  ];
+  return [{ cx: c.x, cy: c.y, w: side, d: side * 0.85, rot: 0, parcelArea: zoneArea }];
 }
 
-/** Random non-overlapping placement with random rotation, strictly inside poly. */
 function parcelizeRandom(
   poly: Point2D[],
   coverage: number,
@@ -322,27 +323,9 @@ function parcelizeCorridor(
   const cx = (bb.minX + bb.maxX) / 2;
   const cy = (bb.minY + bb.maxY) / 2;
   if (alongX) {
-    return [
-      {
-        cx,
-        cy,
-        w: Math.min(W * 0.85, W - 4),
-        d: strip,
-        rot: 0,
-        parcelArea: zoneArea,
-      },
-    ];
+    return [{ cx, cy, w: Math.min(W * 0.85, W - 4), d: strip, rot: 0, parcelArea: zoneArea }];
   }
-  return [
-    {
-      cx,
-      cy,
-      w: strip,
-      d: Math.min(D * 0.85, D - 4),
-      rot: 0,
-      parcelArea: zoneArea,
-    },
-  ];
+  return [{ cx, cy, w: strip, d: Math.min(D * 0.85, D - 4), rot: 0, parcelArea: zoneArea }];
 }
 
 export interface GenerateOptions {
@@ -363,26 +346,31 @@ export function generateBuildingsForZone(
   const poly = zonePolygon(zone);
   if (poly.length < 3) return [];
 
-  const setback = Math.max(0, params.setbackM);
   const zoneArea = zoneAreaM2(zone);
   const rng = mulberry32(params.seed);
   const min = MIN_FOOTPRINT[zone.type] ?? MIN_FOOTPRINT.residential;
 
+  let workPoly = poly;
+  if (params.setbackM > 0.5) {
+    const shrunk = shrinkPoly(poly, params.setbackM);
+    if (shrunk) workPoly = shrunk;
+  }
+
   let cells: Cell[] = [];
   switch (params.buildForm) {
     case 'tower':
-      cells = parcelizeTower(poly, params.coverage, min.w, zoneArea);
+      cells = parcelizeTower(workPoly, params.coverage, min.w, zoneArea);
       break;
     case 'random':
-      cells = parcelizeRandom(poly, params.coverage, min.w, min.d, zoneArea, rng);
+      cells = parcelizeRandom(workPoly, params.coverage, min.w, min.d, zoneArea, rng);
       break;
     case 'corridor':
-      cells = parcelizeCorridor(poly, params.parcelDepthM, params.coverage, min.w, zoneArea);
+      cells = parcelizeCorridor(workPoly, params.parcelDepthM, params.coverage, min.w, zoneArea);
       break;
     case 'block':
     default:
       cells = parcelizePerimeter(
-        poly,
+        workPoly,
         params.parcelDepthM,
         params.coverage,
         min.w,
@@ -397,25 +385,33 @@ export function generateBuildingsForZone(
 
   for (let i = 0; i < cells.length; i++) {
     const cell = cells[i];
-    let { cx, cy, w, d, rot } = cell;
+    let fp = cell.footprint ?? rectFootprint(cell.cx, cell.cy, cell.w, cell.d, cell.rot);
 
-    let fp = rectFootprint(cx, cy, w, d, rot);
-    let tries = 0;
-    while (!footprintInside(fp, poly) && tries < 6) {
-      w *= 0.85;
-      d *= 0.85;
-      if (w < min.w * 0.6 || d < min.d * 0.6) break;
-      fp = rectFootprint(cx, cy, w, d, rot);
-      tries++;
+    if (!cell.footprint) {
+      let w = cell.w;
+      let d = cell.d;
+      let tries = 0;
+      while (!footprintInside(fp, poly) && tries < 6) {
+        w *= 0.85;
+        d *= 0.85;
+        if (w < min.w * 0.6 || d < min.d * 0.6) break;
+        fp = rectFootprint(cell.cx, cell.cy, w, d, cell.rot);
+        tries++;
+      }
     }
-    if (!footprintInside(fp, poly)) continue;
+
+    if (cell.footprint) {
+      let insideN = 0;
+      for (const p of fp) if (pointInPoly(p, poly)) insideN++;
+      if (insideN < fp.length * 0.75) continue;
+    } else if (!footprintInside(fp, poly)) {
+      continue;
+    }
 
     const aabb = fpAabb(fp);
-    void setback;
-
     let overlaps = false;
     for (const a of accepted) {
-      if (aabbOverlap(aabb, a.aabb, 1.5)) {
+      if (aabbOverlap(aabb, a.aabb, 0.8)) {
         overlaps = true;
         break;
       }
@@ -423,9 +419,9 @@ export function generateBuildingsForZone(
     if (overlaps) continue;
 
     const fpA = footprintArea(fp);
-    if (fpA < min.w * min.d * 0.35) continue;
+    if (fpA < 8) continue;
 
-    const { heightM, floors } = heightFromFar(
+    let { heightM, floors } = heightFromFar(
       params.far,
       cell.parcelArea,
       fpA,
@@ -433,15 +429,22 @@ export function generateBuildingsForZone(
       FLOOR_HEIGHT_M
     );
 
-    let h = heightM;
-    let fl = floors;
     if (params.buildForm === 'tower') {
-      fl = Math.max(
-        floors,
-        Math.min(params.maxFloors, Math.max(1, Math.round((params.far * zoneArea) / fpA)))
+      floors = Math.min(
+        params.maxFloors,
+        Math.max(floors, Math.max(1, Math.round((params.far * zoneArea) / fpA)))
       );
-      fl = Math.min(fl, params.maxFloors);
-      h = fl * FLOOR_HEIGHT_M;
+      heightM = floors * FLOOR_HEIGHT_M;
+    }
+
+    if (params.buildForm === 'random') {
+      const lo = Math.max(1, Math.floor(params.maxFloors * 0.35));
+      const hi = Math.max(lo, params.maxFloors);
+      floors = lo + Math.floor(rng() * (hi - lo + 1));
+      const farFloors = Math.max(1, Math.round((params.far * cell.parcelArea) / fpA));
+      floors = Math.min(floors, Math.max(1, Math.round((floors + farFloors) / 2)));
+      floors = Math.min(floors, params.maxFloors);
+      heightM = floors * FLOOR_HEIGHT_M;
     }
 
     accepted.push({ aabb });
@@ -449,8 +452,8 @@ export function generateBuildingsForZone(
       id: uid(zone.id, i, params.seed),
       zoneId: zone.id,
       footprint: fp,
-      heightM: h,
-      floors: fl,
+      heightM,
+      floors,
       type: zone.type,
       buildForm: params.buildForm,
     });
