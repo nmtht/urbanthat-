@@ -31,9 +31,8 @@ export default function App() {
   const c = useAppController();
   const {
     dialogOpen, setDialogOpen, startedEmpty, loading, error, osm, tool, setTool,
-    zones, setZones, generatedBuildings, setGeneratedBuildings, zoneType, setZoneType,
-    userRoads, setUserRoads, roadProfile, setRoadProfile, roadOptions, setRoadOptions,
-    roadDrawMode, setRoadDrawMode, zoneDrawMode, setZoneDrawMode, roadDraftPts,
+    zones, setZones, generatedBuildings, setGeneratedBuildings, zoneType,
+    userRoads, setUserRoads, roadProfile, roadOptions, roadDrawMode, zoneDrawMode,
     drawingActive, selected, setSelected, undoTick, cmdStack,
     hour, setHour, sceneOpen, setSceneOpen, quality, setQuality, fogAmount, setFogAmount,
     showGrid, setShowGrid, showNorth, setShowNorth, units, setUnits, hover,
@@ -100,6 +99,8 @@ export default function App() {
         />
       </Canvas>
 
+      <Toolbar active={tool} onChange={setTool} onImport={openImport} />
+
       <div style={hud.top}>
         <StatusChip
           counts={
@@ -112,15 +113,18 @@ export default function App() {
                   treeCount: osm.treeCount,
                 }
               : userRoads.length || zones.length
-                ? { buildingCount: generatedBuildings.length, roadCount: userRoads.length, waterCount: 0, greenCount: 0, treeCount: 0 }
+                ? {
+                    buildingCount: generatedBuildings.length,
+                    roadCount: userRoads.length,
+                    waterCount: 0,
+                    greenCount: 0,
+                    treeCount: 0,
+                  }
                 : null
           }
+          loading={loading}
         />
         <div style={hud.topRight}>
-          <Toolbar tool={tool} onTool={setTool} />
-          <button type="button" style={hud.btn} onClick={openImport}>
-            Map
-          </button>
           <button type="button" style={hud.btn} onClick={() => setSceneOpen((o) => !o)}>
             Scene
           </button>
@@ -128,7 +132,13 @@ export default function App() {
       </div>
 
       {!startedEmpty && !osm && !loading && (
-        <EmptyState onImport={openImport} onEmpty={() => { setStartedEmpty(true); setDialogOpen(false); }} />
+        <EmptyState
+          onImport={openImport}
+          onStartEmpty={() => {
+            setStartedEmpty(true);
+            setDialogOpen(false);
+          }}
+        />
       )}
 
       <ScenePanel
@@ -191,7 +201,10 @@ export default function App() {
         }}
       />
 
-      <NorthArrow visible={showNorth && (!!osm || zones.length > 0 || userRoads.length > 0)} yawDeg={yawDeg} />
+      <NorthArrow
+        visible={showNorth && (!!osm || zones.length > 0 || userRoads.length > 0)}
+        yawDeg={yawDeg}
+      />
       <HoverHud info={hover.info} x={hover.x} y={hover.y} />
 
       {(osm || userRoads.length > 0 || zones.length > 0 || generatedBuildings.length > 0) && (
