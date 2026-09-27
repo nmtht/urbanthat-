@@ -37,7 +37,7 @@ import {
   buildOsmContextLayer,
   disposeOsmContextLayer,
 } from './osm/osmContextLayer';
-import { setFacadeNightFactor, clearFacadeCache } from './render/buildingFacades';
+import { setFacadeNightFactor, clearFacadeCache, applyQualityToOsmGroup } from './render/buildingFacades';
 import { Atmosphere, nightFactorFromHour } from './render/Atmosphere';
 
 interface OsmState {
@@ -428,10 +428,14 @@ export default function App() {
   useEffect(() => {
     if (qualityRef.current === quality) return;
     qualityRef.current = quality;
-    if (!lastBbox.current) return;
     clearFacadeCache();
-    handleImport(lastBbox.current);
-  }, [quality, handleImport]);
+    if (osm) {
+      applyQualityToOsmGroup(osm.group, quality);
+    }
+    if (lastBbox.current) {
+      handleImport(lastBbox.current);
+    }
+  }, [quality, handleImport, osm]);
 
   const fitKey = osm ? `${osm.bbox.south},${osm.bbox.west},${osm.buildingCount}` : null;
   const fitTarget = useMemo(() => {
@@ -487,7 +491,7 @@ export default function App() {
         <group>{osm && <primitive object={osm.group} />}</group>
         {showGrid && <gridHelper args={[2000, 40, '#3a3a3c', '#2c2c2e']} position={[0, 0.02, 0]} />}
         <ZoneMeshes zones={zones} />
-        <UserRoadsLayer roads={userRoads} />
+        <UserRoadsLayer roads={userRoads} quality={quality} hour={hour} />
         <ZoneBridge
           enabled={tool === 'zone'}
           zoneType={zoneType}
