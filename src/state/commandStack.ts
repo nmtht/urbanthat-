@@ -147,3 +147,106 @@ export class DeleteOsmCommand implements Command {
     }
   }
 }
+
+/** Replace all generated buildings for a zone (or clear). Undo restores previous list for that zone. */
+export class GenerateZoneCommand<T extends { id: string; zoneId: string }> implements Command {
+  readonly label: string;
+  private prev: T[];
+
+  constructor(
+    private zoneId: string,
+    private next: T[],
+    private getBuildings: () => T[],
+    private setBuildings: (updater: (prev: T[]) => T[]) => void,
+    label = 'Generate buildings'
+  ) {
+    this.label = label;
+    this.prev = [];
+  }
+
+  execute(): void {
+    this.prev = this.getBuildings().filter((b) => b.zoneId === this.zoneId);
+    this.setBuildings((all) => [
+      ...all.filter((b) => b.zoneId !== this.zoneId),
+      ...this.next,
+    ]);
+  }
+
+  undo(): void {
+    this.setBuildings((all) => [
+      ...all.filter((b) => b.zoneId !== this.zoneId),
+      ...this.prev,
+    ]);
+  }
+}
+
+export class ClearZoneBuildingsCommand<T extends { id: string; zoneId: string }> implements Command {
+  readonly label = 'Clear buildings';
+  private prev: T[] = [];
+
+  constructor(
+    private zoneId: string,
+    private getBuildings: () => T[],
+    private setBuildings: (updater: (prev: T[]) => T[]) => void
+  ) {}
+
+  execute(): void {
+    this.prev = this.getBuildings().filter((b) => b.zoneId === this.zoneId);
+    this.setBuildings((all) => all.filter((b) => b.zoneId !== this.zoneId));
+  }
+
+  undo(): void {
+    this.setBuildings((all) => [
+      ...all.filter((b) => b.zoneId !== this.zoneId),
+      ...this.prev,
+    ]);
+  }
+}
+
+export class DeleteBuildingCommand<T extends { id: string }> implements Command {
+  readonly label = 'Delete building';
+
+  constructor(
+    private building: T,
+    private setBuildings: (updater: (prev: T[]) => T[]) => void
+  ) {}
+
+  execute(): void {
+    const id = this.building.id;
+    this.setBuildings((prev) => prev.filter((b) => b.id !== id));
+  }
+
+  undo(): void {
+    this.setBuildings((prev) => {
+      if (prev.some((b) => b.id === this.building.id)) return prev;
+      return [...prev, this.building];
+    });
+  }
+}
+
+export class UpdateBuildingCommand<T extends { id: string }> implements Command {
+  readonly label = 'Update building';
+  private prev: T | null = null;
+
+  constructor(
+    private id: string,
+    private patch: Partial<T>,
+    private getBuildings: () => T[],
+    private setBuildings: (updater: (prev: T[]) => T[]) => void
+  ) {}
+
+  execute(): void {
+    const cur = this.getBuildings().find((b) => b.id === this.id);
+    if (!cur) return;
+    this.prev = { ...cur };
+    this.setBuildings((all) =>
+      all.map((b) => (b.id === this.id ? { ...b, ...this.patch } : b))
+    );
+  }
+
+  undo(): void {
+    if (!this.prev) return;
+    const snap = this.prev;
+    this.setBuildings((all) => all.map((b) => (b.id === snap.id ? snap : b)));
+  }
+}
