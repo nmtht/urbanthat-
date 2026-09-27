@@ -3,17 +3,20 @@ import type { SceneStats } from '../domain/stats';
 import { formatM, formatArea } from '../domain/stats';
 import { ZONE_LABELS, type ZoneType } from '../domain/zones';
 
-export type OsmQuality = 'low' | 'med' | 'high';
+/** Model detail tier (not just OSM fetch). */
+export type ModelQuality = 'low' | 'med' | 'high';
+/** @deprecated use ModelQuality */
+export type OsmQuality = ModelQuality;
 
 interface Props {
   open: boolean;
   onClose: () => void;
   hour: number;
   onHour: (h: number) => void;
-  quality: OsmQuality;
-  onQuality: (q: OsmQuality) => void;
-  showTrees: boolean;
-  onShowTrees: (v: boolean) => void;
+  quality: ModelQuality;
+  onQuality: (q: ModelQuality) => void;
+  fogAmount: number;
+  onFogAmount: (v: number) => void;
   showGrid: boolean;
   onShowGrid: (v: boolean) => void;
   showNorth: boolean;
@@ -22,6 +25,12 @@ interface Props {
   onUnits: (u: 'm' | 'ft') => void;
   stats?: SceneStats | null;
 }
+
+const QUALITY_HINT: Record<ModelQuality, string> = {
+  low: 'Massing only · primitive roads',
+  med: 'Floor bands · flat roads · no trees',
+  high: 'Facades · trees · street lamps · night lights',
+};
 
 export function ScenePanel(props: Props) {
   if (!props.open) return null;
@@ -44,9 +53,7 @@ export function ScenePanel(props: Props) {
           <Row
             label="Boundary"
             value={
-              st.boundaryAreaM2 != null
-                ? formatArea(st.boundaryAreaM2, u)
-                : 'not set'
+              st.boundaryAreaM2 != null ? formatArea(st.boundaryAreaM2, u) : 'not set'
             }
           />
           <Row label="Roads" value={`${st.roadCount} · ${formatM(st.roadLengthM, u)}`} />
@@ -82,7 +89,7 @@ export function ScenePanel(props: Props) {
         style={s.slider}
       />
 
-      <div style={s.section}>OSM quality</div>
+      <div style={s.section}>Model quality</div>
       <div style={s.seg}>
         {(['low', 'med', 'high'] as const).map((q) => (
           <button
@@ -95,15 +102,23 @@ export function ScenePanel(props: Props) {
           </button>
         ))}
       </div>
+      <div style={s.hint}>{QUALITY_HINT[props.quality]}</div>
 
-      <label style={s.check}>
-        <input
-          type="checkbox"
-          checked={props.showTrees}
-          onChange={(e) => props.onShowTrees(e.target.checked)}
-        />
-        Show trees
+      <div style={s.section}>Atmosphere</div>
+      <label style={s.row}>
+        <span style={s.rowLabel}>Fog</span>
+        <span style={s.rowValue}>{Math.round(props.fogAmount * 100)}%</span>
       </label>
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.05}
+        value={props.fogAmount}
+        onChange={(e) => props.onFogAmount(parseFloat(e.target.value))}
+        style={s.slider}
+      />
+
       <label style={s.check}>
         <input
           type="checkbox"
@@ -205,7 +220,7 @@ const s: Record<string, CSSProperties> = {
     opacity: 0.45,
     margin: '10px 0 6px',
   },
-  seg: { display: 'flex', gap: 4, marginBottom: 8 },
+  seg: { display: 'flex', gap: 4, marginBottom: 4 },
   segBtn: {
     flex: 1,
     border: 'none',
