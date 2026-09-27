@@ -1,6 +1,7 @@
 /**
- * Zone → GeneratedBuilding[] pipeline (Sprint 4 MVP).
- * Phase 1: block + open (+ simple tower). Rect zones first; polygon uses bbox.
+ * Zone → GeneratedBuilding[] pipeline (Sprint 4).
+ * Buildings must stay inside the zone polygon, never overlap.
+ * block = perimeter courtyard along boundary.
  */
 
 import type { Point2D } from '../domain/SceneOrigin';
@@ -20,12 +21,11 @@ import {
 const MIN_FOOTPRINT: Record<string, { w: number; d: number }> = {
   residential: { w: 8, d: 8 },
   commercial: { w: 12, d: 12 },
-  industrial: { w: 20, d: 15 },
+  industrial: { w: 16, d: 12 },
   park: { w: 0, d: 0 },
   boundary: { w: 0, d: 0 },
 };
 
-/** Mulberry32 — deterministic PRNG from seed. */
 function mulberry32(seed: number) {
   let t = seed >>> 0;
   return () => {
@@ -64,20 +64,61 @@ function footprintArea(fp: Point2D[]): number {
   return Math.abs(a) * 0.5;
 }
 
-/** Simple AABB inset (setback). For rect zones this is exact; for poly uses bbox. */
-function insetBBox(
-  minX: number,
-  maxX: number,
-  minY: number,
-  maxY: number,
-  setback: number
-): { minX: number; maxX: number; minY: number; maxY: number } | null {
-  const nx = minX + setback;
-  const xx = maxX - setback;
-  const ny = minY + setback;
-  const xy = maxY - setback;
-  if (xx - nx < 6 || xy - ny < 6) return null;
-  return { minX: nx, maxX: xx, minY: ny, maxY: xy };
+function pointInPoly(p: Point2D, poly: Point2D[]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x,
+      yi = poly[i].y;
+    const xj = poly[j].x,
+      yj = poly[j].y;
+    const intersect =
+      yi > p.y !== yj > p.y && p.x < ((xj - xi) * (p.y - yi)) / (yj - yi + 1e-12) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+/** True if every corner (and center) of the footprint is inside the polygon. */
+function footprintInside(fp: Point2D[], poly: Point2D[]): boolean {
+  for (const p of fp) {
+    if (!pointInPoly(p, poly)) return false;
+  }
+  let cx = 0,
+    cy = 0;
+  for (const p of fp) {
+    cx += p.x;
+    cy += p.y;
+  }
+  cx /= fp.length;
+  cy /= fp.length;
+  return pointInPoly({ x: cx, y: cy }, poly);
+}
+
+function aabbOverlap(
+  a: { minX: number; maxX: number; minY: number; maxY: number },
+  b: { minX: number; maxX: number; minY: number; maxY: number },
+  pad = 1.5
+): boolean {
+  return !(
+    a.maxX + pad < b.minX ||
+    a.minX - pad > b.maxX ||
+    a.maxY + pad < b.minY ||
+    a.minY - pad > b.maxY
+  );
+}
+
+function fpAabb(fp: Point2D[]) {
+  let minX = Infinity,
+    maxX = -Infinity,
+    minY = Infinity,
+    maxY = -Infinity;
+  for (const p of fp) {
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y);
+    maxY = Math.max(maxY, p.y);
+  }
+  return { minX, maxX, minY, maxY };
 }
 
 function uid(prefix: string, i: number, seed: number): string {
@@ -98,190 +139,210 @@ function heightFromFar(
   return { heightM: floors * floorH, floors };
 }
 
-interface ParcelCell {
+interface Cell {
   cx: number;
   cy: number;
   w: number;
   d: number;
+  rot: number;
   parcelArea: number;
 }
 
-/** Grid parcels along the longer axis; optional courtyard when zone is large. */
-function parcelizeBlock(
-  box: { minX: number; maxX: number; minY: number; maxY: number },
+function polyBBox(poly: Point2D[]) {
+  let minX = Infinity,
+    maxX = -Infinity,
+    minY = Infinity,
+    maxY = -Infinity;
+  for (const p of poly) {
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y);
+    maxY = Math.max(maxY, p.y);
+  }
+  return { minX, maxX, minY, maxY };
+}
+
+/** Perimeter (block): buildings along each edge, depth toward interior → courtyard. */
+function parcelizePerimeter(
+  poly: Point2D[],
   parcelDepthM: number,
   coverage: number,
   minW: number,
   minD: number,
-  rng: () => number
-): ParcelCell[] {
-  const W = box.maxX - box.minX;
-  const D = box.maxY - box.minY;
-  const cells: ParcelCell[] = [];
+  zoneArea: number
+): Cell[] {
+  const cells: Cell[] = [];
+  const depth = Math.max(minD, Math.min(parcelDepthM, 18));
+  const frontW = Math.max(minW, Math.min(20, 14));
+  const n = poly.length;
 
-  const alongX = W >= D;
-  const depth = Math.min(parcelDepthM, (alongX ? D : W) * 0.45);
-  const streetGap = 6;
+  let cx = 0,
+    cy = 0;
+  for (const p of poly) {
+    cx += p.x;
+    cy += p.y;
+  }
+  cx /= n;
+  cy /= n;
 
-  const rows: { y0: number; y1: number }[] = [];
-  if (alongX) {
-    if (D > depth * 2 + streetGap + 4) {
-      rows.push({ y0: box.minY, y1: box.minY + depth });
-      rows.push({ y0: box.maxY - depth, y1: box.maxY });
-    } else {
-      rows.push({ y0: box.minY, y1: box.maxY });
-    }
-  } else {
-    if (W > depth * 2 + streetGap + 4) {
-      rows.push({ y0: box.minX, y1: box.minX + depth });
-      rows.push({ y0: box.maxX - depth, y1: box.maxX });
-    } else {
-      rows.push({ y0: box.minX, y1: box.maxX });
+  for (let i = 0; i < n; i++) {
+    const a = poly[i];
+    const b = poly[(i + 1) % n];
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (len < frontW * 0.8) continue;
+    const tx = (b.x - a.x) / len;
+    const ty = (b.y - a.y) / len;
+    const mx = (a.x + b.x) / 2;
+    const my = (a.y + b.y) / 2;
+    let nx = cx - mx;
+    let ny = cy - my;
+    const nl = Math.hypot(nx, ny) || 1;
+    nx /= nl;
+    ny /= nl;
+
+    const count = Math.max(1, Math.floor(len / frontW));
+    const unit = len / count;
+    for (let k = 0; k < count; k++) {
+      const t = (k + 0.5) / count;
+      const ex = a.x + (b.x - a.x) * t;
+      const ey = a.y + (b.y - a.y) * t;
+      const inset = 1.5 + depth / 2;
+      const px = ex + nx * inset;
+      const py = ey + ny * inset;
+      const w = Math.max(minW, unit * 0.88 * Math.sqrt(Math.min(1, coverage / 0.4)));
+      const d = Math.max(minD, depth * 0.9);
+      const rot = Math.atan2(ty, tx);
+      cells.push({
+        cx: px,
+        cy: py,
+        w,
+        d,
+        rot,
+        parcelArea: unit * depth,
+      });
     }
   }
 
-  const frontLen = alongX ? W : D;
-  const unitW = Math.max(minW, Math.min(22, frontLen / Math.max(2, Math.floor(frontLen / 18))));
-  const nUnits = Math.max(1, Math.floor(frontLen / unitW));
-  const actualUnit = frontLen / nUnits;
-
-  for (const row of rows) {
-    const rowDepth = row.y1 - row.y0;
-    for (let i = 0; i < nUnits; i++) {
-      let cx: number;
-      let cy: number;
-      let w: number;
-      let d: number;
-      if (alongX) {
-        const x0 = box.minX + i * actualUnit;
-        cx = x0 + actualUnit / 2;
-        cy = (row.y0 + row.y1) / 2;
-        w = actualUnit * 0.92;
-        d = rowDepth * 0.9;
-      } else {
-        const y0 = box.minY + i * actualUnit;
-        cx = (row.y0 + row.y1) / 2;
-        cy = y0 + actualUnit / 2;
-        w = rowDepth * 0.9;
-        d = actualUnit * 0.92;
-      }
-      const scale = Math.sqrt(Math.max(0.15, Math.min(1, coverage / 0.55)));
-      w = Math.max(minW, w * scale);
-      d = Math.max(minD, d * scale);
-      cx += (rng() - 0.5) * 0.8;
-      cy += (rng() - 0.5) * 0.8;
-      const parcelArea = actualUnit * rowDepth;
-      cells.push({ cx, cy, w, d, parcelArea });
-    }
-  }
-
+  const maxByCov = Math.max(1, Math.round((zoneArea * coverage) / (frontW * depth * 0.7)));
+  if (cells.length > maxByCov) return cells.slice(0, maxByCov);
   return cells;
 }
 
+/** Tower: single building, small footprint, max height from FAR. */
 function parcelizeTower(
-  box: { minX: number; maxX: number; minY: number; maxY: number },
+  poly: Point2D[],
   coverage: number,
   minW: number,
-  rng: () => number
-): ParcelCell[] {
-  const W = box.maxX - box.minX;
-  const D = box.maxY - box.minY;
-  const area = W * D;
-  const targetFp = area * Math.min(0.35, coverage * 0.7);
+  zoneArea: number
+): Cell[] {
+  let cx = 0,
+    cy = 0;
+  for (const p of poly) {
+    cx += p.x;
+    cy += p.y;
+  }
+  cx /= poly.length;
+  cy /= poly.length;
+  if (!pointInPoly({ x: cx, y: cy }, poly)) {
+    const bb = polyBBox(poly);
+    cx = (bb.minX + bb.maxX) / 2;
+    cy = (bb.minY + bb.maxY) / 2;
+  }
+  const targetFp = Math.max(minW * minW, zoneArea * Math.min(0.15, Math.max(0.05, coverage)));
   const side = Math.max(minW, Math.sqrt(targetFp));
-  const n = Math.min(4, Math.max(1, Math.round(area / 4000)));
-  const cells: ParcelCell[] = [];
-  const cols = n === 1 ? 1 : 2;
-  const rows = Math.ceil(n / cols);
-  for (let i = 0; i < n; i++) {
-    const col = i % cols;
-    const row = Math.floor(i / cols);
-    const cx = box.minX + ((col + 0.5) / cols) * W + (rng() - 0.5) * 4;
-    const cy = box.minY + ((row + 0.5) / rows) * D + (rng() - 0.5) * 4;
-    const s = side * (0.85 + rng() * 0.25);
-    cells.push({
+  return [
+    {
       cx,
       cy,
-      w: s,
-      d: s * (0.7 + rng() * 0.5),
-      parcelArea: area / n,
-    });
-  }
-  return cells;
+      w: side,
+      d: side * 0.85,
+      rot: 0,
+      parcelArea: zoneArea,
+    },
+  ];
 }
 
+/** Random non-overlapping placement with random rotation, strictly inside poly. */
 function parcelizeRandom(
-  box: { minX: number; maxX: number; minY: number; maxY: number },
+  poly: Point2D[],
   coverage: number,
   minW: number,
   minD: number,
+  zoneArea: number,
   rng: () => number
-): ParcelCell[] {
-  const W = box.maxX - box.minX;
-  const D = box.maxY - box.minY;
-  const area = W * D;
-  const avgFp = Math.max(minW * minD, 120);
-  const targetCount = Math.max(1, Math.round((area * coverage) / avgFp));
-  const cells: ParcelCell[] = [];
-  const placed: { x: number; y: number; r: number }[] = [];
+): Cell[] {
+  const bb = polyBBox(poly);
+  const W = bb.maxX - bb.minX;
+  const D = bb.maxY - bb.minY;
+  const avgFp = Math.max(minW * minD, 100);
+  const targetCount = Math.max(1, Math.min(40, Math.round((zoneArea * coverage) / avgFp)));
+  const cells: Cell[] = [];
+  const placed: { aabb: ReturnType<typeof fpAabb> }[] = [];
   let attempts = 0;
-  while (cells.length < targetCount && attempts < targetCount * 40) {
+  const maxAttempts = targetCount * 80;
+
+  while (cells.length < targetCount && attempts < maxAttempts) {
     attempts++;
-    const w = minW * (1 + rng() * 0.8);
-    const d = minD * (1 + rng() * 0.8);
-    const margin = Math.max(w, d) * 0.55;
-    const cx = box.minX + margin + rng() * (W - margin * 2);
-    const cy = box.minY + margin + rng() * (D - margin * 2);
-    if (cx < box.minX + margin || cx > box.maxX - margin) continue;
-    if (cy < box.minY + margin || cy > box.maxY - margin) continue;
-    const r = Math.hypot(w, d) * 0.45;
+    const w = minW * (0.9 + rng() * 0.7);
+    const d = minD * (0.9 + rng() * 0.7);
+    const rot = (rng() - 0.5) * Math.PI;
+    const margin = Math.hypot(w, d) * 0.55;
+    const cx = bb.minX + margin + rng() * Math.max(0.1, W - margin * 2);
+    const cy = bb.minY + margin + rng() * Math.max(0.1, D - margin * 2);
+    const fp = rectFootprint(cx, cy, w, d, rot);
+    if (!footprintInside(fp, poly)) continue;
+    const aabb = fpAabb(fp);
     let ok = true;
     for (const p of placed) {
-      if (Math.hypot(p.x - cx, p.y - cy) < p.r + r + 3) {
+      if (aabbOverlap(aabb, p.aabb, 2)) {
         ok = false;
         break;
       }
     }
     if (!ok) continue;
-    placed.push({ x: cx, y: cy, r });
-    cells.push({ cx, cy, w, d, parcelArea: area / targetCount });
+    placed.push({ aabb });
+    cells.push({ cx, cy, w, d, rot, parcelArea: zoneArea / targetCount });
   }
   return cells;
 }
 
 function parcelizeCorridor(
-  box: { minX: number; maxX: number; minY: number; maxY: number },
+  poly: Point2D[],
   parcelDepthM: number,
   coverage: number,
-  minW: number
-): ParcelCell[] {
-  const W = box.maxX - box.minX;
-  const D = box.maxY - box.minY;
+  minW: number,
+  zoneArea: number
+): Cell[] {
+  const bb = polyBBox(poly);
+  const W = bb.maxX - bb.minX;
+  const D = bb.maxY - bb.minY;
   const alongX = W >= D;
-  const depth = Math.min(parcelDepthM, (alongX ? D : W) * 0.7);
-  const cells: ParcelCell[] = [];
+  const depth = Math.min(parcelDepthM, (alongX ? D : W) * 0.55);
+  const strip = Math.max(minW, depth * Math.sqrt(Math.max(0.2, coverage)));
+  const cx = (bb.minX + bb.maxX) / 2;
+  const cy = (bb.minY + bb.maxY) / 2;
   if (alongX) {
-    const cy = (box.minY + box.maxY) / 2;
-    const stripD = Math.max(minW, depth * Math.sqrt(coverage));
-    cells.push({
-      cx: (box.minX + box.maxX) / 2,
-      cy,
-      w: W * 0.95,
-      d: stripD,
-      parcelArea: W * D,
-    });
-  } else {
-    const cx = (box.minX + box.maxX) / 2;
-    const stripW = Math.max(minW, depth * Math.sqrt(coverage));
-    cells.push({
-      cx,
-      cy: (box.minY + box.maxY) / 2,
-      w: stripW,
-      d: D * 0.95,
-      parcelArea: W * D,
-    });
+    return [
+      {
+        cx,
+        cy,
+        w: Math.min(W * 0.85, W - 4),
+        d: strip,
+        rot: 0,
+        parcelArea: zoneArea,
+      },
+    ];
   }
-  return cells;
+  return [
+    {
+      cx,
+      cy,
+      w: strip,
+      d: Math.min(D * 0.85, D - 4),
+      rot: 0,
+      parcelArea: zoneArea,
+    },
+  ];
 }
 
 export interface GenerateOptions {
@@ -300,55 +361,69 @@ export function generateBuildingsForZone(
   }
 
   const poly = zonePolygon(zone);
-  let minX = Infinity,
-    maxX = -Infinity,
-    minY = Infinity,
-    maxY = -Infinity;
-  for (const p of poly) {
-    minX = Math.min(minX, p.x);
-    maxX = Math.max(maxX, p.x);
-    minY = Math.min(minY, p.y);
-    maxY = Math.max(maxY, p.y);
-  }
+  if (poly.length < 3) return [];
 
-  const inset = insetBBox(minX, maxX, minY, maxY, params.setbackM);
-  if (!inset) return [];
-
+  const setback = Math.max(0, params.setbackM);
+  const zoneArea = zoneAreaM2(zone);
   const rng = mulberry32(params.seed);
   const min = MIN_FOOTPRINT[zone.type] ?? MIN_FOOTPRINT.residential;
 
-  let cells: ParcelCell[] = [];
+  let cells: Cell[] = [];
   switch (params.buildForm) {
     case 'tower':
-      cells = parcelizeTower(inset, params.coverage, min.w, rng);
+      cells = parcelizeTower(poly, params.coverage, min.w, zoneArea);
       break;
     case 'random':
-      cells = parcelizeRandom(inset, params.coverage, min.w, min.d, rng);
+      cells = parcelizeRandom(poly, params.coverage, min.w, min.d, zoneArea, rng);
       break;
     case 'corridor':
-      cells = parcelizeCorridor(inset, params.parcelDepthM, params.coverage, min.w);
+      cells = parcelizeCorridor(poly, params.parcelDepthM, params.coverage, min.w, zoneArea);
       break;
     case 'block':
     default:
-      cells = parcelizeBlock(
-        inset,
+      cells = parcelizePerimeter(
+        poly,
         params.parcelDepthM,
         params.coverage,
         min.w,
         min.d,
-        rng
+        zoneArea
       );
       break;
   }
 
   const out: GeneratedBuilding[] = [];
+  const accepted: { aabb: ReturnType<typeof fpAabb> }[] = [];
+
   for (let i = 0; i < cells.length; i++) {
     const cell = cells[i];
-    const rot =
-      params.buildForm === 'random' ? (rng() - 0.5) * ((15 * Math.PI) / 180) : 0;
-    const fp = rectFootprint(cell.cx, cell.cy, cell.w, cell.d, rot);
+    let { cx, cy, w, d, rot } = cell;
+
+    let fp = rectFootprint(cx, cy, w, d, rot);
+    let tries = 0;
+    while (!footprintInside(fp, poly) && tries < 6) {
+      w *= 0.85;
+      d *= 0.85;
+      if (w < min.w * 0.6 || d < min.d * 0.6) break;
+      fp = rectFootprint(cx, cy, w, d, rot);
+      tries++;
+    }
+    if (!footprintInside(fp, poly)) continue;
+
+    const aabb = fpAabb(fp);
+    void setback;
+
+    let overlaps = false;
+    for (const a of accepted) {
+      if (aabbOverlap(aabb, a.aabb, 1.5)) {
+        overlaps = true;
+        break;
+      }
+    }
+    if (overlaps) continue;
+
     const fpA = footprintArea(fp);
-    if (fpA < min.w * min.d * 0.5) continue;
+    if (fpA < min.w * min.d * 0.35) continue;
 
     const { heightM, floors } = heightFromFar(
       params.far,
@@ -358,12 +433,24 @@ export function generateBuildingsForZone(
       FLOOR_HEIGHT_M
     );
 
+    let h = heightM;
+    let fl = floors;
+    if (params.buildForm === 'tower') {
+      fl = Math.max(
+        floors,
+        Math.min(params.maxFloors, Math.max(1, Math.round((params.far * zoneArea) / fpA)))
+      );
+      fl = Math.min(fl, params.maxFloors);
+      h = fl * FLOOR_HEIGHT_M;
+    }
+
+    accepted.push({ aabb });
     out.push({
       id: uid(zone.id, i, params.seed),
       zoneId: zone.id,
       footprint: fp,
-      heightM,
-      floors,
+      heightM: h,
+      floors: fl,
       type: zone.type,
       buildForm: params.buildForm,
     });
@@ -382,7 +469,9 @@ export function actualFar(buildings: GeneratedBuilding[], zone: ZoneRect): numbe
   return gfa / area;
 }
 
-export function styleFromZoneType(t: ZoneType): 'residential' | 'office' | 'industrial' | 'generic' {
+export function styleFromZoneType(
+  t: ZoneType
+): 'residential' | 'office' | 'industrial' | 'generic' {
   if (t === 'residential') return 'residential';
   if (t === 'commercial') return 'office';
   if (t === 'industrial') return 'industrial';
