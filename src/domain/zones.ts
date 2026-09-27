@@ -4,7 +4,6 @@ export type ZoneType = 'residential' | 'commercial' | 'industrial' | 'park' | 'b
 
 /**
  * Building form — foundation for the zoning generation sprint.
- * `block` = perimeter courtyard (along boundary, hollow center).
  */
 export type ZoneBuildForm =
   | 'block'
@@ -28,7 +27,7 @@ export interface ZoneRect {
   coverage?: number;
   /** Setback from zone boundary / roads (m). Default ~4. */
   setbackM?: number;
-  /** Parcel depth from street front for perimeter/corridor (m). */
+  /** Parcel depth from street front for block/corridor (m). */
   parcelDepthM?: number;
   /** Deterministic RNG seed for parcelization. */
   seed?: number;
@@ -69,28 +68,28 @@ export const ZONE_BUILD_FORMS: { id: ZoneBuildForm; label: string }[] = [
   { id: 'open', label: 'Open space' },
 ];
 
-/** Default zoning metrics by zone type (Inspector can override). */
+/** Default zoning metrics by type (Inspector can override). */
 export const ZONE_DEFAULTS: Record<
   ZoneType,
   { far: number; coverage: number; maxFloors: number; form: ZoneBuildForm; setbackM: number }
 > = {
   residential: { far: 2.0, coverage: 0.45, maxFloors: 8, form: 'block', setbackM: 4 },
-  commercial: { far: 3.0, coverage: 0.55, maxFloors: 14, form: 'block', setbackM: 3 },
-  industrial: { far: 1.1, coverage: 0.4, maxFloors: 3, form: 'random', setbackM: 6 },
+  commercial: { far: 3.0, coverage: 0.6, maxFloors: 14, form: 'block', setbackM: 3 },
+  industrial: { far: 1.1, coverage: 0.5, maxFloors: 3, form: 'open', setbackM: 6 },
   park: { far: 0, coverage: 0, maxFloors: 0, form: 'open', setbackM: 0 },
   boundary: { far: 0, coverage: 0, maxFloors: 0, form: 'open', setbackM: 0 },
 };
 
-/** Per build-form defaults (merged after type defaults). */
+/** Per-build-form defaults (applied when switching form in Inspector if field unset). */
 export const FORM_DEFAULTS: Record<
   ZoneBuildForm,
-  { far?: number; coverage?: number; maxFloors?: number; setbackM?: number; parcelDepthM?: number }
+  { far?: number; coverage?: number; maxFloors?: number; parcelDepthM?: number }
 > = {
-  block: { coverage: 0.4, far: 2.0, maxFloors: 8, setbackM: 4, parcelDepthM: 14 },
-  tower: { coverage: 0.12, far: 6.0, maxFloors: 32, setbackM: 8, parcelDepthM: 20 },
-  random: { coverage: 0.35, far: 1.5, maxFloors: 6, setbackM: 4, parcelDepthM: 16 },
-  corridor: { coverage: 0.45, far: 2.5, maxFloors: 10, setbackM: 3, parcelDepthM: 18 },
-  open: { coverage: 0, far: 0, maxFloors: 0, setbackM: 0 },
+  block: { far: 2.0, coverage: 0.5, maxFloors: 8, parcelDepthM: 18 },
+  tower: { far: 4.0, coverage: 0.2, maxFloors: 24, parcelDepthM: 20 },
+  random: { far: 1.8, coverage: 0.35, maxFloors: 10, parcelDepthM: 16 },
+  corridor: { far: 2.5, coverage: 0.55, maxFloors: 12, parcelDepthM: 22 },
+  open: { far: 0, coverage: 0, maxFloors: 0 },
 };
 
 export const FLOOR_HEIGHT_M = 3.2;
@@ -125,15 +124,13 @@ export function zonePolygon(z: ZoneRect): Point2D[] {
 
 export function resolveZoneParams(z: ZoneRect) {
   const d = ZONE_DEFAULTS[z.type];
-  const form = (z.buildForm ?? d.form) as ZoneBuildForm;
-  const fd = FORM_DEFAULTS[form];
   return {
-    far: z.far ?? fd.far ?? d.far,
-    coverage: z.coverage ?? fd.coverage ?? d.coverage,
-    maxFloors: z.maxFloors ?? fd.maxFloors ?? d.maxFloors,
-    buildForm: form,
-    setbackM: z.setbackM ?? fd.setbackM ?? d.setbackM,
-    parcelDepthM: z.parcelDepthM ?? fd.parcelDepthM ?? 14,
+    far: z.far ?? d.far,
+    coverage: z.coverage ?? d.coverage,
+    maxFloors: z.maxFloors ?? d.maxFloors,
+    buildForm: (z.buildForm ?? d.form) as ZoneBuildForm,
+    setbackM: z.setbackM ?? d.setbackM,
+    parcelDepthM: z.parcelDepthM ?? 28,
     seed: z.seed ?? hashSeed(z.id),
   };
 }
