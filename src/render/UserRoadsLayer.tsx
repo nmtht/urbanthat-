@@ -2,7 +2,8 @@ import { useEffect } from 'react';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { RoadCenterline } from '../domain/roads';
-import { buildRoadGeometry, localToWorld } from '../geometry/roadBuild';
+import { buildNetworkGeometry, localToWorld } from '../geometry/roadBuild';
+import { ensureClipper } from '../geometry/clipperUnion';
 
 interface Props {
   roads: RoadCenterline[];
@@ -17,14 +18,33 @@ function ringToShape(ring: { x: number; y: number }[]): THREE.Shape | null {
   return shape;
 }
 
-/**
- * Renders committed user roads as asphalt meshes + dashed centerlines.
- * Separate from OSM context; pickable as kind: 'user-road'.
- */
+function meshFromRing(
+  ring: { x: number; y: number }[],
+  yUp: number,
+  mat: THREE.Material,
+  userData: Record<string, unknown>
+): THREE.Mesh | null {
+  const shape = ringToShape(ring);
+  if (!shape) return null;
+  const geom = new THREE.ShapeGeometry(shape);
+  geom.rotateX(-Math.PI / 2);
+  geom.translate(0, yUp, 0);
+  const mesh = new THREE.Mesh(geom, mat);
+  mesh.userData = userData;
+  return mesh;
+}
+
+let clipperKickoff = false;
+
 export function UserRoadsLayer({ roads }: Props) {
   const { scene } = useThree();
 
   useEffect(() => {
+    if (!clipperKickoff) {
+      clipperKickoff = true;
+      void ensureClipper();
+    }
+
     let group = scene.getObjectByName('UserRoadsLayer') as THREE.Group | undefined;
     if (!group) {
       group = new THREE.Group();
@@ -45,18 +65,30 @@ export function UserRoadsLayer({ roads }: Props) {
       });
     }
 
-    for (const road of roads) {
-      const g = buildRoadGeometry(road);
-      if (!g) continue;
+    const network = buildNetworkGeometry(roads);
+    const seenCarriage = new Set<string>();
 
-      const shape = ringToShape(g.carriagePoly);
-      if (!shape) continue;
+    for (const g of network) {
+      if (g.sidewalkPolys.length > 0) {
+        const swMat = new THREE.MeshStandardMaterial({
+          color: '#3a3836',
+          roughness: 0.92,
+          metalness: 0,
+          polygonOffset: true,
+          polygonOffsetFactor: 2,
+          polygonOffsetUnits: 2,
+        });
+        for (const poly of g.sidewalkPolys) {
+          const mesh = meshFromRing(poly, 0.04, swMat, {
+            kind: 'user-road-sidewalk',
+            roadId: g.id,
+            nonPickable: true,
+          });
+          if (mesh) group.add(mesh);
+        }
+      }
 
-      const geom = new THREE.ShapeGeometry(shape);
-      geom.rotateX(-Math.PI / 2);
-      geom.translate(0, 0.065, 0);
-
-      const mat = new THREE.MeshStandardMaterial({
+      const asphaltMat = new THREE.MeshStandardMaterial({
         color: g.profile.asphaltColor,
         roughness: 0.85,
         metalness: 0.05,
@@ -65,15 +97,25 @@ export function UserRoadsLayer({ roads }: Props) {
         polygonOffsetUnits: 1,
       });
 
-      const mesh = new THREE.Mesh(geom, mat);
-      mesh.name = `user-road-${g.id}`;
-      mesh.userData = {
-        kind: 'user-road',
-        roadId: g.id,
-        nonPickable: false,
-        osmTags: { highway: g.profile.id, name: g.profile.label },
-      };
-      group.add(mesh);
+      for (const poly of g.carriagePolys) {
+        const sig = poly
+          .slice(0, 4)
+          .map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`)
+          .join('|');
+        if (seenCarriage.has(sig)) continue;
+        seenCarriage.add(sig);
+
+        const mesh = meshFromRing(poly, 0.065, asphaltMat, {
+          kind: 'user-road',
+          roadId: g.id,
+          nonPickable: false,
+          osmTags: { highway: g.profile.id, name: g.profile.label },
+        });
+        if (mesh) {
+          mesh.name = `user-road-${g.id}`;
+          group.add(mesh);
+        }
+      }
 
       if (g.markingSegments.length > 0) {
         const positions: number[] = [];
