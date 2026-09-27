@@ -251,6 +251,7 @@ function PickBridge({
 
 export default function App() {
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [startedEmpty, setStartedEmpty] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [osm, setOsm] = useState<OsmState | null>(null);
@@ -335,6 +336,7 @@ export default function App() {
           bbox,
         });
         setDialogOpen(false);
+        setStartedEmpty(true);
         setSelected(null);
         setZones([]);
         setUserRoads([]);
@@ -496,7 +498,9 @@ export default function App() {
         }}
       >
         <Atmosphere hour={hour} />
-        <Suspense fallback={null}>{!osm && <GroundPlane size={400} />}</Suspense>
+        <Suspense fallback={null}>
+          <GroundPlane size={4000} />
+        </Suspense>
         <group>{osm && <primitive object={osm.group} />}</group>
         {showGrid && <gridHelper args={[2000, 40, '#3a3a3c', '#2c2c2e']} position={[0, 0.02, 0]} />}
         <ZoneMeshes zones={zones} />
@@ -593,11 +597,16 @@ export default function App() {
           <span style={hud.zoneHint}>
             {roadDraftPts != null
               ? `Road · ${roadDraftPts} pts · Enter`
-              : 'click · Enter · 1-5'}
+              : 'click / drag · Enter · 1-5'}
           </span>
         </div>
       )}
-      {!osm && !loading && !dialogOpen && <EmptyState onImport={openImport} />}
+      {!osm && !loading && !dialogOpen && !startedEmpty && (
+        <EmptyState
+          onImport={openImport}
+          onStartEmpty={() => setStartedEmpty(true)}
+        />
+      )}
 
       <ScenePanel
         open={sceneOpen}
