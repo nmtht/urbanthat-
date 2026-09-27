@@ -3,7 +3,6 @@ import { useThree } from '@react-three/fiber';
 import { Sky, Stars } from '@react-three/drei';
 import * as THREE from 'three';
 
-/** Continuous day factor 0 (deep night) … 1 (noon). Smooth dawn/dusk ramps. */
 export function dayFactorFromHour(hour: number): number {
   if (hour >= 5.5 && hour <= 20.5) {
     const t = (hour - 5.5) / 15;
@@ -17,7 +16,6 @@ export function dayFactorFromHour(hour: number): number {
   return Math.max(0, 1 - d / 2) * 0.08;
 }
 
-/** Night window-glow factor 0..1 (smooth). */
 export function nightFactorFromHour(hour: number): number {
   if (hour < 5.5 || hour > 20.5) return 1;
   if (hour < 7) return 1 - (hour - 5.5) / 1.5;
@@ -45,13 +43,10 @@ function lerpColor(a: number, b: number, t: number): number {
 
 interface Props {
   hour: number;
-  /** 0 = minimal fog, 1 = heavy haze. Default ~0.35 */
+  /** 0 = clear, 1 = heavy haze. */
   fogAmount?: number;
 }
 
-/**
- * Smooth atmosphere: continuous dawn → day → dusk → night.
- */
 export function Atmosphere({ hour, fogAmount = 0.35 }: Props) {
   const { scene, camera, gl } = useThree();
   const sun = useMemo(() => sunFromHour(hour), [hour]);
@@ -72,26 +67,24 @@ export function Atmosphere({ hour, fogAmount = 0.35 }: Props) {
     const duskCol = 0xc4a888;
     const dayCol = 0xc5d6ea;
     let horizon: number;
-    if (elevN > 0.25) {
-      horizon = dayCol;
-    } else if (elevN > 0) {
-      horizon = lerpColor(duskCol, dayCol, elevN / 0.25);
-    } else if (elevN > -0.15) {
-      horizon = lerpColor(nightCol, duskCol, 1 + elevN / 0.15);
-    } else {
-      horizon = nightCol;
-    }
+    if (elevN > 0.25) horizon = dayCol;
+    else if (elevN > 0) horizon = lerpColor(duskCol, dayCol, elevN / 0.25);
+    else if (elevN > -0.15) horizon = lerpColor(nightCol, duskCol, 1 + elevN / 0.15);
+    else horizon = nightCol;
 
-    const baseDensity = 0.00002 + fogAmount * 0.00018;
-    const timeBoost = nightW * 0.5 + duskW * 0.35;
-    const density = baseDensity * (1 + timeBoost);
+    // Linear fog — clearly responds to slider (0 clear … 1 heavy).
+    const t = Math.max(0, Math.min(1, fogAmount));
+    const near = lerp(800, 40, t);
+    const far = lerp(4000, 220, t);
+    const nearAdj = near * (1 - nightW * 0.25 - duskW * 0.1);
+    const farAdj = far * (1 - nightW * 0.2);
 
     if (elevN < -0.05) {
       scene.background = new THREE.Color(horizon);
     } else {
       scene.background = null;
     }
-    scene.fog = new THREE.FogExp2(horizon, density);
+    scene.fog = new THREE.Fog(horizon, nearAdj, farAdj);
     gl.setClearColor(horizon);
 
     return () => {
