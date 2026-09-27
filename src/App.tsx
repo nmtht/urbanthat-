@@ -9,6 +9,9 @@ import { ZoneBridge, ZoneMeshes } from './tools/ZoneBridge';
 import { RoadBridge } from './tools/RoadBridge';
 import { UserRoadsLayer } from './render/UserRoadsLayer';
 import { UserBuildingsLayer } from './render/UserBuildingsLayer';
+import type { ZoneType } from './domain/zones';
+import type { DrawMode, ZoneDrawMode } from './domain/roads';
+import { ROAD_PROFILE_ORDER, ROAD_PROFILES, getRoadProfile } from './domain/roads';
 import { StatusChip } from './ui/StatusChip';
 import { EmptyState } from './ui/EmptyState';
 import { ScenePanel } from './ui/ScenePanel';
@@ -44,12 +47,18 @@ export default function App() {
     generatedBuildings,
     setGeneratedBuildings,
     zoneType,
+    setZoneType,
     userRoads,
     setUserRoads,
     roadProfile,
+    setRoadProfile,
     roadOptions,
+    setRoadOptions,
     roadDrawMode,
+    setRoadDrawMode,
     zoneDrawMode,
+    setZoneDrawMode,
+    roadDraftPts,
     drawingActive,
     selected,
     setSelected,
@@ -176,6 +185,149 @@ export default function App() {
           </button>
         </div>
       </div>
+
+      {tool === 'zone' && (
+        <div style={hud.toolPanel}>
+          <div style={hud.zoneBar}>
+            {(['residential', 'commercial', 'industrial', 'park', 'boundary'] as ZoneType[]).map(
+              (zt) => (
+                <button
+                  key={zt}
+                  type="button"
+                  style={{ ...hud.zoneBtn, ...(zoneType === zt ? hud.zoneBtnOn : null) }}
+                  onClick={() => setZoneType(zt)}
+                >
+                  {zt === 'boundary' ? 'Bnd' : zt.slice(0, 3)}
+                </button>
+              )
+            )}
+            <span style={hud.sep} />
+            {(
+              [
+                ['rect', 'Rect'],
+                ['polygon', 'Poly'],
+                ['freehand', 'Free'],
+              ] as [ZoneDrawMode, string][]
+            ).map(([m, label]) => (
+              <button
+                key={m}
+                type="button"
+                style={{ ...hud.zoneBtn, ...(zoneDrawMode === m ? hud.zoneBtnOn : null) }}
+                onClick={() => setZoneDrawMode(m)}
+              >
+                {label}
+              </button>
+            ))}
+            <span style={hud.zoneHint}>
+              {zoneDrawMode === 'rect'
+                ? 'drag rectangle'
+                : zoneDrawMode === 'polygon'
+                  ? 'click · Enter'
+                  : 'hold-drag outline'}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {tool === 'road' && (
+        <div style={hud.toolPanel}>
+          <div style={hud.zoneBar}>
+            {ROAD_PROFILE_ORDER.map((pid) => (
+              <button
+                key={pid}
+                type="button"
+                style={{ ...hud.zoneBtn, ...(roadProfile === pid ? hud.zoneBtnOn : null) }}
+                onClick={() => {
+                  setRoadProfile(pid);
+                  setRoadOptions({});
+                }}
+                title={ROAD_PROFILES[pid].label}
+              >
+                {ROAD_PROFILES[pid].label.slice(0, 3)}
+              </button>
+            ))}
+            <span style={hud.sep} />
+            {(
+              [
+                ['straight', 'Straight'],
+                ['curve', 'Curve'],
+                ['freehand', 'Free'],
+              ] as [DrawMode, string][]
+            ).map(([m, label]) => (
+              <button
+                key={m}
+                type="button"
+                style={{ ...hud.zoneBtn, ...(roadDrawMode === m ? hud.zoneBtnOn : null) }}
+                onClick={() => setRoadDrawMode(m)}
+              >
+                {label}
+              </button>
+            ))}
+            <span style={hud.zoneHint}>
+              {roadDraftPts != null
+                ? `${roadDraftPts} pts · Enter`
+                : roadDrawMode === 'straight'
+                  ? 'click · Enter'
+                  : roadDrawMode === 'curve'
+                    ? '3 clicks'
+                    : 'hold-drag'}
+            </span>
+          </div>
+          <div style={hud.zoneBar}>
+            <label style={hud.optLabel}>
+              Lanes
+              <select
+                style={hud.select}
+                value={roadOptions.lanes ?? getRoadProfile(roadProfile).lanes}
+                onChange={(e) =>
+                  setRoadOptions((o) => ({ ...o, lanes: parseInt(e.target.value, 10) }))
+                }
+              >
+                {[1, 2, 3, 4, 5, 6].map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label style={hud.optLabel}>
+              <input
+                type="checkbox"
+                checked={(roadOptions.parkingM ?? 0) > 0}
+                onChange={(e) =>
+                  setRoadOptions((o) => ({ ...o, parkingM: e.target.checked ? 2.2 : 0 }))
+                }
+              />
+              Parking
+            </label>
+            <label style={hud.optLabel}>
+              <input
+                type="checkbox"
+                checked={(roadOptions.greenBufferM ?? 0) > 0}
+                onChange={(e) =>
+                  setRoadOptions((o) => ({ ...o, greenBufferM: e.target.checked ? 1.5 : 0 }))
+                }
+              />
+              Green
+            </label>
+            <label style={hud.optLabel}>
+              <input
+                type="checkbox"
+                checked={(roadOptions.sidewalkM ?? getRoadProfile(roadProfile).sidewalkM) > 0}
+                onChange={(e) =>
+                  setRoadOptions((o) => ({
+                    ...o,
+                    sidewalkM: e.target.checked
+                      ? getRoadProfile(roadProfile).sidewalkM || 1.5
+                      : 0,
+                  }))
+                }
+              />
+              Sidewalk
+            </label>
+          </div>
+        </div>
+      )}
 
       {!startedEmpty && !osm && !loading && (
         <EmptyState
@@ -304,6 +456,72 @@ const hud: Record<string, CSSProperties> = {
     fontWeight: 500,
     cursor: 'pointer',
     backdropFilter: 'blur(12px)',
+  },
+  toolPanel: {
+    position: 'absolute',
+    bottom: 88,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+    zIndex: 22,
+    alignItems: 'center',
+    pointerEvents: 'auto',
+  },
+  zoneBar: {
+    position: 'relative',
+    display: 'flex',
+    gap: 6,
+    alignItems: 'center',
+    padding: '6px 10px',
+    borderRadius: 12,
+    background: 'rgba(28,28,30,0.82)',
+    backdropFilter: 'blur(16px)',
+  },
+  sep: {
+    width: 1,
+    height: 18,
+    background: 'rgba(255,255,255,0.15)',
+    margin: '0 4px',
+  },
+  optLabel: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 4,
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 11,
+    fontFamily: '-apple-system, system-ui, sans-serif',
+    cursor: 'pointer',
+  },
+  select: {
+    background: 'rgba(255,255,255,0.1)',
+    border: 'none',
+    borderRadius: 4,
+    color: '#fff',
+    fontSize: 11,
+    padding: '2px 4px',
+  },
+  zoneBtn: {
+    border: 'none',
+    borderRadius: 8,
+    padding: '6px 10px',
+    background: 'transparent',
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 12,
+    fontFamily: '-apple-system, system-ui, sans-serif',
+    cursor: 'pointer',
+    textTransform: 'capitalize',
+  },
+  zoneBtnOn: {
+    background: 'rgba(255,255,255,0.12)',
+    color: '#fff',
+  },
+  zoneHint: {
+    color: 'rgba(255,255,255,0.35)',
+    fontSize: 11,
+    marginLeft: 4,
+    fontFamily: '-apple-system, system-ui, sans-serif',
   },
   undo: {
     position: 'absolute',
