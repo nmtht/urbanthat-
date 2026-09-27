@@ -150,6 +150,7 @@ export function SelectionBridge({ tool, enabled, selected, onSelect, onDeleteCli
       const hits = raycaster.intersectObjects(roots, true);
 
       let bestZone: THREE.Object3D | null = null;
+      let bestBoundary: THREE.Object3D | null = null;
       let bestUserRoad: THREE.Object3D | null = null;
       let bestRoad: THREE.Object3D | null = null;
       for (const hit of hits) {
@@ -158,7 +159,11 @@ export function SelectionBridge({ tool, enabled, selected, onSelect, onDeleteCli
         if (!root || !root.visible || root.userData.deleted) continue;
         if (root.userData.kind === 'building') return root;
         if (root.userData.kind === 'zone') {
-          if (!bestZone) bestZone = root;
+          if (root.userData.zoneType === 'boundary') {
+            if (!bestBoundary) bestBoundary = root;
+          } else if (!bestZone) {
+            bestZone = root;
+          }
           continue;
         }
         if (root.userData.kind === 'user-road') {
@@ -167,7 +172,7 @@ export function SelectionBridge({ tool, enabled, selected, onSelect, onDeleteCli
         }
         if (!bestRoad) bestRoad = root;
       }
-      return bestZone ?? bestUserRoad ?? bestRoad;
+      return bestZone ?? bestUserRoad ?? bestRoad ?? bestBoundary;
     };
 
     const collectSameTag = (seed: THREE.Object3D): THREE.Object3D[] => {
@@ -233,11 +238,23 @@ export function SelectionBridge({ tool, enabled, selected, onSelect, onDeleteCli
       }
     };
 
+    const onKey = (ev: KeyboardEvent) => {
+      const tag = (ev.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (ev.key === 'Escape') {
+        ev.preventDefault();
+        lastClick.current = null;
+        onSelectRef.current(null);
+      }
+    };
+
     el.addEventListener('pointerdown', onPointerDown);
     el.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('keydown', onKey);
     return () => {
       el.removeEventListener('pointerdown', onPointerDown);
       el.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('keydown', onKey);
     };
   }, [enabled, camera, scene, gl, raycaster, pointer]);
 
