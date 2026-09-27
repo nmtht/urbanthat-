@@ -119,12 +119,10 @@ export function ZoneBridge({ enabled, zoneType, drawMode, onCommit, onDrawingAct
       const p = toLocal(ev.clientX, ev.clientY);
       if (!p) return;
       cursor.current = p;
-
       if (!dragging.current) {
         bump();
         return;
       }
-
       const mode = modeRef.current;
       if (mode === 'rect' && rectDrag.current) {
         rectDrag.current.x1 = p.x;
@@ -291,6 +289,8 @@ export function ZoneBridge({ enabled, zoneType, drawMode, onCommit, onDrawingAct
         mesh.position.set((minX + maxX) / 2, 0.03, -(minY + maxY) / 2);
         mesh.scale.set(w, 1, h);
         (mesh.material as THREE.MeshBasicMaterial).color.set(ZONE_COLORS[typeRef.current]);
+        (mesh.material as THREE.MeshBasicMaterial).opacity =
+          typeRef.current === 'boundary' ? 0.08 : 0.35;
       } else {
         mesh.visible = false;
       }
@@ -335,7 +335,7 @@ export function ZoneBridge({ enabled, zoneType, drawMode, onCommit, onDrawingAct
     line.userData.nonPickable = true;
     group.add(line);
 
-    if (pts.length >= 3) {
+    if (pts.length >= 3 && typeRef.current !== 'boundary') {
       try {
         const shape = new THREE.Shape();
         shape.moveTo(pts[0].x, pts[0].y);
@@ -373,10 +373,52 @@ export function ZoneBridge({ enabled, zoneType, drawMode, onCommit, onDrawingAct
   );
 }
 
+/** Outline-only boundary — no fill so interior zones stay pickable. */
+function BoundaryOutline({ zone }: { zone: ZoneRect }) {
+  const geom = useMemo(() => {
+    const pts: Point2D[] =
+      zone.polygon && zone.polygon.length >= 3
+        ? zone.polygon
+        : [
+            { x: zone.minX, y: zone.minY },
+            { x: zone.maxX, y: zone.minY },
+            { x: zone.maxX, y: zone.maxY },
+            { x: zone.minX, y: zone.maxY },
+          ];
+    const positions: number[] = [];
+    for (const p of pts) {
+      positions.push(p.x, 0.04, -p.y);
+    }
+    positions.push(pts[0].x, 0.04, -pts[0].y);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    return g;
+  }, [zone]);
+
+  return (
+    <line
+      geometry={geom}
+      userData={{
+        kind: 'zone',
+        zoneId: zone.id,
+        zoneType: 'boundary',
+        nonPickable: false,
+        osmTags: { name: zone.name || 'boundary', landuse: 'boundary' },
+      }}
+    >
+      <lineBasicMaterial color={ZONE_COLORS.boundary} transparent opacity={0.95} />
+    </line>
+  );
+}
+
 export function ZoneMeshes({ zones }: { zones: ZoneRect[] }) {
   return (
     <group name="Zones">
       {zones.map((z) => {
+        if (z.type === 'boundary') {
+          return <BoundaryOutline key={z.id} zone={z} />;
+        }
+
         if (z.polygon && z.polygon.length >= 3) {
           const shape = new THREE.Shape();
           shape.moveTo(z.polygon[0].x, z.polygon[0].y);
@@ -401,7 +443,7 @@ export function ZoneMeshes({ zones }: { zones: ZoneRect[] }) {
               <meshBasicMaterial
                 color={ZONE_COLORS[z.type]}
                 transparent
-                opacity={z.type === 'boundary' ? 0.12 : 0.28}
+                opacity={0.28}
                 depthWrite={false}
                 side={THREE.DoubleSide}
               />
@@ -428,7 +470,7 @@ export function ZoneMeshes({ zones }: { zones: ZoneRect[] }) {
             <meshBasicMaterial
               color={ZONE_COLORS[z.type]}
               transparent
-              opacity={z.type === 'boundary' ? 0.12 : 0.28}
+              opacity={0.28}
               depthWrite={false}
             />
           </mesh>
