@@ -38,7 +38,8 @@ function BuildingMesh({
       bevelEnabled: false,
       steps: 1,
     });
-    // ExtrudeGeometry is in XY, depth along Z → rotate to Y-up
+    // ExtrudeGeometry is in XY, depth along +Z → rotate to Y-up:
+    // (x,y,z) → (x, z, -y) so world Z = -localY
     g.rotateX(-Math.PI / 2);
     g.computeVertexNormals();
     return g;
@@ -50,22 +51,18 @@ function BuildingMesh({
   );
   const roofMat = useMemo(() => getRoofMaterial(style), [style]);
 
-  // Roof as a thin box on top (simple, readable massing)
+  // Roof: same footprint extruded thinly, then lifted to roof height.
+  // Same rotateX so it stays glued to the building massing.
   const roofGeom = useMemo(() => {
-    let minX = Infinity,
-      maxX = -Infinity,
-      minY = Infinity,
-      maxY = -Infinity;
-    for (const p of building.footprint) {
-      minX = Math.min(minX, p.x);
-      maxX = Math.max(maxX, p.x);
-      minY = Math.min(minY, p.y);
-      maxY = Math.max(maxY, p.y);
-    }
-    const w = Math.max(0.5, maxX - minX);
-    const d = Math.max(0.5, maxY - minY);
-    const g = new THREE.BoxGeometry(w, 0.35, d);
-    g.translate((minX + maxX) / 2, building.heightM + 0.15, (minY + maxY) / 2);
+    const shape = shapeFromFootprint(building.footprint);
+    const g = new THREE.ExtrudeGeometry(shape, {
+      depth: 0.4,
+      bevelEnabled: false,
+      steps: 1,
+    });
+    g.rotateX(-Math.PI / 2);
+    g.translate(0, building.heightM, 0);
+    g.computeVertexNormals();
     return g;
   }, [building.footprint, building.heightM]);
 
