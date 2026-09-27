@@ -17,12 +17,12 @@ interface Props {
 
 const SNAP_RADIUS_M = 2.5;
 const MIN_SEGMENT_M = 1.0;
+const DRAG_SAMPLE_M = 2.5;
 
 /**
- * Click-mode road drawing:
- * - LMB click places vertices
- * - Move shows live corridor preview
- * - Enter / double-click commits
+ * Road drawing:
+ * - Click mode: LMB places vertices; Enter / double-click commits
+ * - Drag mode: hold LMB and move — continuous polyline sampled by distance
  * - Esc discards; Backspace drops last vertex
  */
 export function RoadBridge({
@@ -41,6 +41,9 @@ export function RoadBridge({
   const draft = useRef<Point2D[]>([]);
   const cursor = useRef<Point2D | null>(null);
   const lastClickT = useRef(0);
+  const dragging = useRef(false);
+  const dragMoved = useRef(false);
+  const downPos = useRef<{ x: number; y: number } | null>(null);
   const previewGroup = useRef<THREE.Group>(null);
   const profileRef = useRef(profileId);
   profileRef.current = profileId;
@@ -84,6 +87,8 @@ export function RoadBridge({
     const pts = simplifyPolyline(draft.current, 0.4);
     draft.current = [];
     cursor.current = null;
+    dragging.current = false;
+    dragMoved.current = false;
     onDraftRef.current?.(null);
     bump();
     if (pts.length < 2) return;
@@ -97,6 +102,8 @@ export function RoadBridge({
   const discardDraft = () => {
     draft.current = [];
     cursor.current = null;
+    dragging.current = false;
+    dragMoved.current = false;
     onDraftRef.current?.(null);
     bump();
   };
@@ -117,9 +124,82 @@ export function RoadBridge({
     if (!enabled) return;
     const el = gl.domElement;
 
-    const onClick = (ev: MouseEvent) => {
+    const onPointerDown = (ev: PointerEvent) => {
       if (ev.button !== 0) return;
       const p0 = toLocal(ev.clientX, ev.clientY);
+      if (!p0) return;
+      const p = snapPoint(p0);
+      downPos.current = { x: ev.clientX, y: ev.clientY };
+      dragging.current = true;
+      dragMoved.current = false;
+
+      if (draft.current.length === 0) {
+        draft.current = [p];
+        onDraftRef.current?.(draft.current.slice());
+        bump();
+      }
+      try {
+        el.setPointerCapture(ev.pointerId);
+      } catch {
+        /* ignore */
+      }
+    };
+
+    const onPointerMove = (ev: PointerEvent) => {
+      const p0 = toLocal(ev.clientX, ev.clientY);
+      if (!p0) return;
+      const p = snapPoint(p0);
+      cursor.current = p;
+
+      if (!dragging.current || !downPos.current) return;
+
+      const dx = ev.clientX - downPos.current.x;
+      const dy = ev.clientY - downPos.current.y;
+      if (Math.hypot(dx, dy) > 6) dragMoved.current = true;
+
+      if (dragMoved.current && draft.current.length >= 1) {
+        const last = draft.current[draft.current.length - 1];
+        if (Math.hypot(p.x - last.x, p.y - last.y) >= DRAG_SAMPLE_M) {
+          draft.current = [...draft.current, p];
+          onDraftRef.current?.(draft.current.slice());
+          bump();
+        }
+      }
+    };
+
+    const onPointerUp = (ev: PointerEvent) => {
+      if (ev.button !== 0) return;
+      try {
+        el.releasePointerCapture(ev.pointerId);
+      } catch {
+        /* ignore */
+      }
+
+      const wasDrag = dragMoved.current;
+      dragging.current = false;
+      const p0 = toLocal(ev.clientX, ev.clientY);
+
+      if (wasDrag) {
+        if (p0 && draft.current.length >= 1) {
+          const p = snapPoint(p0);
+          const last = draft.current[draft.current.length - 1];
+          if (Math.hypot(p.x - last.x, p.y - last.y) >= MIN_SEGMENT_M * 0.5) {
+            draft.current = [...draft.current, p];
+          }
+        }
+        if (draft.current.length >= 2) {
+          commitDraft();
+        } else {
+          onDraftRef.current?.(draft.current.slice());
+          bump();
+        }
+        dragMoved.current = false;
+        downPos.current = null;
+        return;
+      }
+
+      dragMoved.current = false;
+      downPos.current = null;
       if (!p0) return;
       const p = snapPoint(p0);
       const now = Date.now();
@@ -137,25 +217,23 @@ export function RoadBridge({
         return;
       }
 
-      if (draft.current.length === 0) {
-        draft.current = [p];
-      } else {
+      if (draft.current.length === 1) {
+        const first = draft.current[0];
+        if (Math.hypot(p.x - first.x, p.y - first.y) < MIN_SEGMENT_M) {
+          onDraftRef.current?.(draft.current.slice());
+          bump();
+          return;
+        }
+        draft.current = [...draft.current, p];
+      } else if (draft.current.length > 1) {
         const last = draft.current[draft.current.length - 1];
         if (Math.hypot(p.x - last.x, p.y - last.y) < MIN_SEGMENT_M) return;
         draft.current = [...draft.current, p];
+      } else {
+        draft.current = [p];
       }
       onDraftRef.current?.(draft.current.slice());
       bump();
-    };
-
-    const onMove = (ev: PointerEvent) => {
-      if (draft.current.length === 0) {
-        cursor.current = null;
-        return;
-      }
-      const p0 = toLocal(ev.clientX, ev.clientY);
-      if (!p0) return;
-      cursor.current = snapPoint(p0);
     };
 
     const onKey = (ev: KeyboardEvent) => {
@@ -176,7 +254,7 @@ export function RoadBridge({
         return;
       }
       if (ev.key === 'Backspace') {
-        if (draft.current.length > 0) {
+        if (draft.current.length > 0 && !dragging.current) {
           ev.preventDefault();
           draft.current = draft.current.slice(0, -1);
           if (draft.current.length === 0) cursor.current = null;
@@ -186,12 +264,14 @@ export function RoadBridge({
       }
     };
 
-    el.addEventListener('click', onClick);
-    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerdown', onPointerDown);
+    el.addEventListener('pointermove', onPointerMove);
+    el.addEventListener('pointerup', onPointerUp);
     window.addEventListener('keydown', onKey);
     return () => {
-      el.removeEventListener('click', onClick);
-      el.removeEventListener('pointermove', onMove);
+      el.removeEventListener('pointerdown', onPointerDown);
+      el.removeEventListener('pointermove', onPointerMove);
+      el.removeEventListener('pointerup', onPointerUp);
       window.removeEventListener('keydown', onKey);
     };
   }, [enabled, camera, gl, raycaster, pointer, ground, hit]);
@@ -219,6 +299,7 @@ export function RoadBridge({
         pts.push(cursor.current);
       }
     }
+
     if (pts.length < 2) {
       for (const p of draft.current) {
         const m = new THREE.Mesh(
