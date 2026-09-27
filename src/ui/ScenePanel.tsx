@@ -1,4 +1,7 @@
 import type { CSSProperties } from 'react';
+import type { SceneStats } from '../domain/stats';
+import { formatM, formatArea } from '../domain/stats';
+import { ZONE_LABELS, type ZoneType } from '../domain/zones';
 
 export type OsmQuality = 'low' | 'med' | 'high';
 
@@ -17,11 +20,14 @@ interface Props {
   onShowNorth: (v: boolean) => void;
   units: 'm' | 'ft';
   onUnits: (u: 'm' | 'ft') => void;
+  stats?: SceneStats | null;
 }
 
 export function ScenePanel(props: Props) {
   if (!props.open) return null;
   const hourLabel = `${String(Math.floor(props.hour)).padStart(2, '0')}:${props.hour % 1 >= 0.5 ? '30' : '00'}`;
+  const st = props.stats;
+  const u = props.units;
 
   return (
     <div style={s.panel}>
@@ -31,6 +37,36 @@ export function ScenePanel(props: Props) {
           {'\u2715'}
         </button>
       </div>
+
+      <div style={s.section}>Statistics</div>
+      {st ? (
+        <>
+          <Row
+            label="Boundary"
+            value={
+              st.boundaryAreaM2 != null
+                ? formatArea(st.boundaryAreaM2, u)
+                : 'not set'
+            }
+          />
+          <Row label="Roads" value={`${st.roadCount} · ${formatM(st.roadLengthM, u)}`} />
+          <Row label="Zones" value={`${st.zoneCount} · ${formatArea(st.zoneAreaM2, u)}`} />
+          {Object.entries(st.byType).map(([t, v]) => (
+            <Row
+              key={t}
+              label={ZONE_LABELS[t as ZoneType] ?? t}
+              value={`${v.count} · ${formatArea(v.areaM2, u)}`}
+            />
+          ))}
+          {st.boundaryAreaM2 == null && (
+            <div style={s.hint}>
+              Draw a zone with type Boundary to define the study area for totals.
+            </div>
+          )}
+        </>
+      ) : (
+        <div style={s.hint}>No content yet</div>
+      )}
 
       <label style={s.row}>
         <span style={s.rowLabel}>Time</span>
@@ -87,17 +123,26 @@ export function ScenePanel(props: Props) {
 
       <div style={s.section}>Units</div>
       <div style={s.seg}>
-        {(['m', 'ft'] as const).map((u) => (
+        {(['m', 'ft'] as const).map((uOpt) => (
           <button
-            key={u}
+            key={uOpt}
             type="button"
-            style={{ ...s.segBtn, ...(props.units === u ? s.segOn : null) }}
-            onClick={() => props.onUnits(u)}
+            style={{ ...s.segBtn, ...(props.units === uOpt ? s.segOn : null) }}
+            onClick={() => props.onUnits(uOpt)}
           >
-            {u === 'm' ? 'Metres' : 'Feet'}
+            {uOpt === 'm' ? 'Metres' : 'Feet'}
           </button>
         ))}
       </div>
+    </div>
+  );
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={s.statRow}>
+      <span style={s.rowLabel}>{label}</span>
+      <span style={s.rowValue}>{value}</span>
     </div>
   );
 }
@@ -108,6 +153,8 @@ const s: Record<string, CSSProperties> = {
     right: 16,
     top: 56,
     width: 260,
+    maxHeight: 'calc(100% - 80px)',
+    overflowY: 'auto',
     padding: 14,
     borderRadius: 14,
     background: 'rgba(44,44,46,0.82)',
@@ -141,8 +188,14 @@ const s: Record<string, CSSProperties> = {
     fontSize: 12,
     marginBottom: 4,
   },
+  statRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    fontSize: 12,
+    marginBottom: 3,
+  },
   rowLabel: { opacity: 0.6 },
-  rowValue: { fontVariantNumeric: 'tabular-nums' },
+  rowValue: { fontVariantNumeric: 'tabular-nums', textAlign: 'right' },
   slider: { width: '100%', accentColor: '#0a84ff', marginBottom: 12 },
   section: {
     fontSize: 11,
@@ -175,5 +228,11 @@ const s: Record<string, CSSProperties> = {
     fontSize: 13,
     marginBottom: 8,
     cursor: 'pointer',
+  },
+  hint: {
+    fontSize: 11,
+    opacity: 0.4,
+    lineHeight: 1.35,
+    marginBottom: 6,
   },
 };
