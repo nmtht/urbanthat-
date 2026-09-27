@@ -3,9 +3,7 @@ import type { SceneStats } from '../domain/stats';
 import { formatM, formatArea } from '../domain/stats';
 import { ZONE_LABELS, type ZoneType } from '../domain/zones';
 
-/** Model detail tier (not just OSM fetch). */
 export type ModelQuality = 'low' | 'med' | 'high';
-/** @deprecated use ModelQuality */
 export type OsmQuality = ModelQuality;
 
 interface Props {
@@ -75,20 +73,6 @@ export function ScenePanel(props: Props) {
         <div style={s.hint}>No content yet</div>
       )}
 
-      <label style={s.row}>
-        <span style={s.rowLabel}>Time</span>
-        <span style={s.rowValue}>{hourLabel}</span>
-      </label>
-      <input
-        type="range"
-        min={0}
-        max={24}
-        step={0.25}
-        value={props.hour}
-        onChange={(e) => props.onHour(parseFloat(e.target.value))}
-        style={s.slider}
-      />
-
       <div style={s.section}>Model quality</div>
       <div style={s.seg}>
         {(['low', 'med', 'high'] as const).map((q) => (
@@ -105,6 +89,19 @@ export function ScenePanel(props: Props) {
       <div style={s.hint}>{QUALITY_HINT[props.quality]}</div>
 
       <div style={s.section}>Atmosphere</div>
+      <label style={s.row}>
+        <span style={s.rowLabel}>Time</span>
+        <span style={s.rowValue}>{hourLabel}</span>
+      </label>
+      <input
+        type="range"
+        min={0}
+        max={24}
+        step={0.25}
+        value={props.hour}
+        onChange={(e) => props.onHour(parseFloat(e.target.value))}
+        style={s.slider}
+      />
       <label style={s.row}>
         <span style={s.rowLabel}>Fog</span>
         <span style={s.rowValue}>{Math.round(props.fogAmount * 100)}%</span>
