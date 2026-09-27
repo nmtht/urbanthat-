@@ -363,7 +363,6 @@ export function buildOsmContextLayer(
       const clipped = clipPolygonToRect(ring, clipRect);
       if (clipped.length < 3) continue;
       const shape = ringToShape(clipped);
-      if (!shape) return null as never;
       if (!shape) continue;
       const height = buildingHeightM(tags);
       const style = facadeStyleFromBuildingTag(tags.building);
@@ -410,9 +409,7 @@ export function buildOsmContextLayer(
     if (tags.highway) {
       const ring = wayToLocalRing(el, origin);
       if (!ring || ring.length < 2) continue;
-      if (quality === 'low' && (isFootOnly(tags.highway) || tags.highway === 'service' || tags.highway === 'track')) {
-        continue;
-      }
+      if (quality === 'low' && (isFootOnly(tags.highway) || tags.highway === 'service' || tags.highway === 'track')) continue;
       const profile = roadProfile(tags.highway, tags);
       const foot = isFootOnly(tags.highway);
       for (const seg of clipPolylineToRect(ring, clipRect)) {
@@ -432,9 +429,7 @@ export function buildOsmContextLayer(
         }
         if (quality !== 'low' && profile.centerLine && profile.lanes >= 2) dashedCenterLine(clean, 0.08, lanePositions);
         if (!foot) {
-          for (const pt of clean) {
-            asphaltPads.push(circlePolygon(pt.x, pt.y, half * 1.15, 14));
-          }
+          for (const pt of clean) asphaltPads.push(circlePolygon(pt.x, pt.y, half * 1.15, 14));
           if (quality === 'high' && !isFootOnly(tags.highway) && tags.highway !== 'service') {
             let acc = 0;
             for (let i = 0; i < clean.length - 1; i++) {
@@ -506,9 +501,7 @@ export function buildOsmContextLayer(
       }
       if (hit) inside++;
     }
-    if (buildingCentroids.length > 0 && inside / buildingCentroids.length > 0.12) {
-      toRemove.push(child);
-    }
+    if (buildingCentroids.length > 0 && inside / buildingCentroids.length > 0.12) toRemove.push(child);
   }
   for (const obj of toRemove) {
     group.remove(obj);
