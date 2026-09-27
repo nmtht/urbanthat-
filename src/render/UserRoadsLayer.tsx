@@ -3,7 +3,6 @@ import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { RoadCenterline } from '../domain/roads';
 import { buildNetworkGeometry, localToWorld } from '../geometry/roadBuild';
-import { ensureClipper } from '../geometry/clipperUnion';
 
 interface Props {
   roads: RoadCenterline[];
@@ -11,9 +10,17 @@ interface Props {
 
 function ringToShape(ring: { x: number; y: number }[]): THREE.Shape | null {
   if (ring.length < 3) return null;
+  // Drop consecutive duplicates that break ShapeGeometry
+  const clean: { x: number; y: number }[] = [ring[0]];
+  for (let i = 1; i < ring.length; i++) {
+    const p = ring[i];
+    const prev = clean[clean.length - 1];
+    if (Math.hypot(p.x - prev.x, p.y - prev.y) > 1e-4) clean.push(p);
+  }
+  if (clean.length < 3) return null;
   const shape = new THREE.Shape();
-  shape.moveTo(ring[0].x, ring[0].y);
-  for (let i = 1; i < ring.length; i++) shape.lineTo(ring[i].x, ring[i].y);
+  shape.moveTo(clean[0].x, clean[0].y);
+  for (let i = 1; i < clean.length; i++) shape.lineTo(clean[i].x, clean[i].y);
   shape.closePath();
   return shape;
 }
@@ -26,25 +33,24 @@ function meshFromRing(
 ): THREE.Mesh | null {
   const shape = ringToShape(ring);
   if (!shape) return null;
-  const geom = new THREE.ShapeGeometry(shape);
-  geom.rotateX(-Math.PI / 2);
-  geom.translate(0, yUp, 0);
-  const mesh = new THREE.Mesh(geom, mat);
-  mesh.userData = userData;
-  return mesh;
+  try {
+    const geom = new THREE.ShapeGeometry(shape);
+    // Shape is in XY; rotate to XZ ground plane (y-up)
+    geom.rotateX(-Math.PI / 2);
+    geom.translate(0, yUp, 0);
+    geom.computeVertexNormals();
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.userData = userData;
+    return mesh;
+  } catch {
+    return null;
+  }
 }
-
-let clipperKickoff = false;
 
 export function UserRoadsLayer({ roads }: Props) {
   const { scene } = useThree();
 
   useEffect(() => {
-    if (!clipperKickoff) {
-      clipperKickoff = true;
-      void ensureClipper();
-    }
-
     let group = scene.getObjectByName('UserRoadsLayer') as THREE.Group | undefined;
     if (!group) {
       group = new THREE.Group();
@@ -66,20 +72,21 @@ export function UserRoadsLayer({ roads }: Props) {
     }
 
     const network = buildNetworkGeometry(roads);
-    const seenCarriage = new Set<string>();
 
     for (const g of network) {
+      // Sidewalk under asphalt
       if (g.sidewalkPolys.length > 0) {
         const swMat = new THREE.MeshStandardMaterial({
-          color: '#3a3836',
+          color: '#4a4846',
           roughness: 0.92,
           metalness: 0,
+          side: THREE.DoubleSide,
           polygonOffset: true,
           polygonOffsetFactor: 2,
           polygonOffsetUnits: 2,
         });
         for (const poly of g.sidewalkPolys) {
-          const mesh = meshFromRing(poly, 0.04, swMat, {
+          const mesh = meshFromRing(poly, 0.03, swMat, {
             kind: 'user-road-sidewalk',
             roadId: g.id,
             nonPickable: true,
@@ -90,31 +97,23 @@ export function UserRoadsLayer({ roads }: Props) {
 
       const asphaltMat = new THREE.MeshStandardMaterial({
         color: g.profile.asphaltColor,
-        roughness: 0.85,
-        metalness: 0.05,
+        roughness: 0.88,
+        metalness: 0.04,
+        side: THREE.DoubleSide,
         polygonOffset: true,
         polygonOffsetFactor: 1,
         polygonOffsetUnits: 1,
       });
 
-      for (const poly of g.carriagePolys) {
-        const sig = poly
-          .slice(0, 4)
-          .map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`)
-          .join('|');
-        if (seenCarriage.has(sig)) continue;
-        seenCarriage.add(sig);
-
-        const mesh = meshFromRing(poly, 0.065, asphaltMat, {
-          kind: 'user-road',
-          roadId: g.id,
-          nonPickable: false,
-          osmTags: { highway: g.profile.id, name: g.profile.label },
-        });
-        if (mesh) {
-          mesh.name = `user-road-${g.id}`;
-          group.add(mesh);
-        }
+      const mesh = meshFromRing(g.carriagePoly, 0.06, asphaltMat, {
+        kind: 'user-road',
+        roadId: g.id,
+        nonPickable: false,
+        osmTags: { highway: g.profile.id, name: g.profile.label },
+      });
+      if (mesh) {
+        mesh.name = `user-road-${g.id}`;
+        group.add(mesh);
       }
 
       if (g.markingSegments.length > 0) {
