@@ -77,42 +77,61 @@ function matchKey(obj: THREE.Object3D): string {
   return `${kind}:${tags.name ?? ''}`;
 }
 
+/** Restore selection tint without disposing materials (R3F-safe). */
 function clearHighlights(scene: THREE.Scene) {
   scene.traverse((obj) => {
-    if (!(obj instanceof THREE.Mesh)) return;
-    const orig = obj.userData.__selMatOrig as THREE.Material | THREE.Material[] | undefined;
-    if (!orig) return;
-    const cur = obj.material;
-    if (Array.isArray(cur)) cur.forEach((m) => m.dispose());
-    else (cur as THREE.Material)?.dispose?.();
-    obj.material = orig;
+    if (!(obj instanceof THREE.Mesh) && !(obj instanceof THREE.Line)) return;
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+    for (const m of mats) {
+      if (!m) continue;
+      const stored = m.userData?.__selOrig as
+        | { color?: number; opacity?: number; emissive?: number; emissiveIntensity?: number }
+        | undefined;
+      if (!stored) continue;
+      if ((m as THREE.MeshBasicMaterial).isMeshBasicMaterial || (m as THREE.LineBasicMaterial).isLineBasicMaterial) {
+        const b = m as THREE.MeshBasicMaterial;
+        if (stored.color != null) b.color.setHex(stored.color);
+        if (stored.opacity != null) b.opacity = stored.opacity;
+        b.needsUpdate = true;
+      } else if ((m as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
+        const s = m as THREE.MeshStandardMaterial;
+        if (stored.emissive != null) s.emissive.setHex(stored.emissive);
+        if (stored.emissiveIntensity != null) s.emissiveIntensity = stored.emissiveIntensity;
+        s.needsUpdate = true;
+      }
+      delete m.userData.__selOrig;
+    }
     delete obj.userData.__selMatOrig;
   });
 }
 
+/** Tint in place — do not replace material instances (keeps R3F in sync). */
 function boostObject(root: THREE.Object3D) {
   root.traverse((obj) => {
-    if (!(obj instanceof THREE.Mesh)) return;
-    if (obj.userData.__selMatOrig) return;
-    const mat = obj.material as THREE.Material | THREE.Material[];
-    const cloneOne = (m: THREE.Material): THREE.Material => {
-      const c = m.clone();
-      if ((c as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
-        const s = c as THREE.MeshStandardMaterial;
+    if (!(obj instanceof THREE.Mesh) && !(obj instanceof THREE.Line)) return;
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+    for (const m of mats) {
+      if (!m || m.userData?.__selOrig) continue;
+      if ((m as THREE.MeshBasicMaterial).isMeshBasicMaterial || (m as THREE.LineBasicMaterial).isLineBasicMaterial) {
+        const b = m as THREE.MeshBasicMaterial;
+        m.userData.__selOrig = {
+          color: b.color.getHex(),
+          opacity: b.opacity,
+        };
+        b.color.lerp(new THREE.Color('#4a9eff'), 0.4);
+        b.opacity = Math.min(1, (b.opacity ?? 1) * 1.35);
+        b.needsUpdate = true;
+      } else if ((m as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
+        const s = m as THREE.MeshStandardMaterial;
+        m.userData.__selOrig = {
+          emissive: s.emissive.getHex(),
+          emissiveIntensity: s.emissiveIntensity,
+        };
         s.emissive = new THREE.Color('#4a9eff');
         s.emissiveIntensity = 0.45;
         s.needsUpdate = true;
-      } else if ((c as THREE.MeshBasicMaterial).isMeshBasicMaterial) {
-        const b = c as THREE.MeshBasicMaterial;
-        b.color = b.color.clone().lerp(new THREE.Color('#4a9eff'), 0.35);
-        b.opacity = Math.min(1, (b.opacity ?? 1) * 1.4);
-        b.needsUpdate = true;
       }
-      return c;
-    };
-    obj.userData.__selMatOrig = mat;
-    if (Array.isArray(mat)) obj.material = mat.map(cloneOne);
-    else obj.material = cloneOne(mat);
+    }
   });
 }
 
@@ -132,8 +151,24 @@ export function SelectionBridge({ tool, enabled, selected, onSelect, onDeleteCli
   useEffect(() => {
     clearHighlights(scene);
     if (!selected?.objects?.length) return;
-    for (const obj of selected.objects) boostObject(obj);
+    for (const obj of selected.objects) {
+      if (obj && obj.parent) boostObject(obj);
+    }
   }, [selected, scene]);
+
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      const tag = (ev.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (ev.key === 'Escape') {
+        ev.preventDefault();
+        lastClick.current = null;
+        onSelectRef.current(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   useEffect(() => {
     if (!enabled) return;
@@ -251,23 +286,11 @@ export function SelectionBridge({ tool, enabled, selected, onSelect, onDeleteCli
       }
     };
 
-    const onKey = (ev: KeyboardEvent) => {
-      const tag = (ev.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-      if (ev.key === 'Escape') {
-        ev.preventDefault();
-        lastClick.current = null;
-        onSelectRef.current(null);
-      }
-    };
-
     el.addEventListener('pointerdown', onPointerDown);
     el.addEventListener('pointerup', onPointerUp);
-    window.addEventListener('keydown', onKey);
     return () => {
       el.removeEventListener('pointerdown', onPointerDown);
       el.removeEventListener('pointerup', onPointerUp);
-      window.removeEventListener('keydown', onKey);
     };
   }, [enabled, camera, scene, gl, raycaster, pointer]);
 
