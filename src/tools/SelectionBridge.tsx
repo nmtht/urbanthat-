@@ -10,6 +10,7 @@ export interface SelectedOsm {
   objects: THREE.Object3D[];
   zoneId?: string;
   roadId?: string;
+  buildingId?: string;
 }
 
 interface Props {
@@ -24,7 +25,7 @@ function isPickable(obj: THREE.Object3D): boolean {
   if (!obj.visible || obj.userData?.deleted) return false;
   if (obj.userData?.nonPickable) return false;
   const kind = obj.userData?.kind;
-  if (kind === 'user-road' || kind === 'zone') return true;
+  if (kind === 'user-road' || kind === 'zone' || kind === 'user-building') return true;
   if (!kind || !obj.userData?.osmTags) return false;
   if (kind === 'road-pad' || kind === 'tree') return false;
   return true;
@@ -59,6 +60,9 @@ function labelOf(obj: THREE.Object3D): string {
   if (kind === 'zone') {
     return tags.name ?? tags.landuse ?? 'zone';
   }
+  if (kind === 'user-building') {
+    return 'Building';
+  }
   return tags.name ?? kind;
 }
 
@@ -69,6 +73,7 @@ function matchKey(obj: THREE.Object3D): string {
   if (kind === 'road') return `highway:${tags.highway ?? 'road'}`;
   if (kind === 'user-road') return `user-road:${obj.userData?.roadId ?? ''}`;
   if (kind === 'zone') return `zone:${obj.userData?.zoneId ?? ''}`;
+  if (kind === 'user-building') return `user-building:${obj.userData?.buildingId ?? ''}`;
   return `${kind}:${tags.name ?? ''}`;
 }
 
@@ -141,8 +146,10 @@ export function SelectionBridge({ tool, enabled, selected, onSelect, onDeleteCli
       raycaster.setFromCamera(pointer, camera);
       const osmGroup = scene.getObjectByName('OsmContextLayer');
       const userRoads = scene.getObjectByName('UserRoadsLayer');
+      const userBuildings = scene.getObjectByName('UserBuildingsLayer');
       const zones = scene.getObjectByName('Zones');
       const roots: THREE.Object3D[] = [];
+      if (userBuildings) roots.push(userBuildings);
       if (zones) roots.push(zones);
       if (userRoads) roots.push(userRoads);
       if (osmGroup) roots.push(osmGroup);
@@ -152,11 +159,16 @@ export function SelectionBridge({ tool, enabled, selected, onSelect, onDeleteCli
       let bestZone: THREE.Object3D | null = null;
       let bestBoundary: THREE.Object3D | null = null;
       let bestUserRoad: THREE.Object3D | null = null;
+      let bestUserBuilding: THREE.Object3D | null = null;
       let bestRoad: THREE.Object3D | null = null;
       for (const hit of hits) {
         if (!hit.object.visible) continue;
         const root = findPickRoot(hit.object);
         if (!root || !root.visible || root.userData.deleted) continue;
+        if (root.userData.kind === 'user-building') {
+          if (!bestUserBuilding) bestUserBuilding = root;
+          continue;
+        }
         if (root.userData.kind === 'building') return root;
         if (root.userData.kind === 'zone') {
           if (root.userData.zoneType === 'boundary') {
@@ -172,7 +184,7 @@ export function SelectionBridge({ tool, enabled, selected, onSelect, onDeleteCli
         }
         if (!bestRoad) bestRoad = root;
       }
-      return bestZone ?? bestUserRoad ?? bestRoad ?? bestBoundary;
+      return bestUserBuilding ?? bestZone ?? bestUserRoad ?? bestRoad ?? bestBoundary;
     };
 
     const collectSameTag = (seed: THREE.Object3D): THREE.Object3D[] => {
@@ -193,6 +205,7 @@ export function SelectionBridge({ tool, enabled, selected, onSelect, onDeleteCli
       objects,
       zoneId: hit.userData.zoneId as string | undefined,
       roadId: hit.userData.roadId as string | undefined,
+      buildingId: hit.userData.buildingId as string | undefined,
     });
 
     const onPointerDown = (ev: PointerEvent) => {
