@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
-import { OrbitControls, Sky, Stars } from '@react-three/drei';
+import { OrbitControls } from '@react-three/drei';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { ImportMapDialog } from './ui/ImportMapDialog';
@@ -21,7 +21,7 @@ import {
 } from './state/commandStack';
 import { StatusChip } from './ui/StatusChip';
 import { EmptyState } from './ui/EmptyState';
-import { ScenePanel, type OsmQuality } from './ui/ScenePanel';
+import { ScenePanel, type ModelQuality } from './ui/ScenePanel';
 import { InspectorPanel, type InspectorTarget } from './ui/InspectorPanel';
 import { computeSceneStats } from './domain/stats';
 import { HoverHud, type HoverInfo } from './ui/HoverHud';
@@ -38,6 +38,7 @@ import {
   disposeOsmContextLayer,
 } from './osm/osmContextLayer';
 import { setFacadeNightFactor, clearFacadeCache } from './render/buildingFacades';
+import { Atmosphere, nightFactorFromHour } from './render/Atmosphere';
 
 interface OsmState {
   origin: SceneOrigin;
@@ -48,16 +49,6 @@ interface OsmState {
   greenCount: number;
   treeCount: number;
   bbox: BBox;
-}
-
-function sunFromHour(hour: number): THREE.Vector3 {
-  const t = ((hour - 6) / 12) * Math.PI;
-  const elevation = Math.sin(t);
-  const azimuth = ((hour - 12) / 12) * Math.PI;
-  const y = Math.max(elevation, -0.05);
-  const x = Math.cos(azimuth);
-  const z = Math.sin(azimuth) * 0.65;
-  return new THREE.Vector3(x, y, z).normalize().multiplyScalar(100);
 }
 
 function CameraFit({
@@ -102,53 +93,6 @@ function CameraYawReporter({ onYaw }: { onYaw: (deg: number) => void }) {
     return () => cancelAnimationFrame(raf);
   }, [camera, onYaw]);
   return null;
-}
-
-function Atmosphere({ hour }: { hour: number }) {
-  const { scene, camera, gl } = useThree();
-  const sun = useMemo(() => sunFromHour(hour), [hour]);
-  const elev = sun.y;
-  const isNight = elev < 8;
-
-  useEffect(() => {
-    const cam = camera as THREE.PerspectiveCamera;
-    cam.near = 0.5;
-    cam.far = 80_000;
-    cam.updateProjectionMatrix();
-    if (isNight) {
-      scene.background = new THREE.Color('#070a10');
-      scene.fog = new THREE.FogExp2(0x070a10, 0.00012);
-      gl.setClearColor('#070a10');
-    } else {
-      const horizon = elev < 28 ? 0xc4a888 : 0xc5d6ea;
-      scene.background = null;
-      scene.fog = new THREE.FogExp2(horizon, elev < 28 ? 0.0001 : 0.00006);
-      gl.setClearColor(horizon);
-    }
-    return () => {
-      scene.fog = null;
-      scene.background = null;
-    };
-  }, [isNight, elev, scene, camera, gl]);
-
-  if (isNight) {
-    return (
-      <>
-        <ambientLight intensity={0.2} />
-        <directionalLight position={[sun.x, Math.max(Math.abs(sun.y), 30), sun.z]} intensity={0.12} color="#a8b4c8" />
-        <Stars radius={600} depth={120} count={6000} factor={3.5} saturation={0} fade speed={0.3} />
-      </>
-    );
-  }
-  const dusk = elev < 28;
-  return (
-    <>
-      <Sky distance={450_000} sunPosition={[sun.x, sun.y, sun.z]} turbidity={dusk ? 8 : 3.2} rayleigh={dusk ? 2.4 : 1.0} mieCoefficient={dusk ? 0.012 : 0.004} mieDirectionalG={0.85} />
-      <ambientLight intensity={dusk ? 0.32 : 0.5} color={dusk ? '#ffd0b0' : '#ffffff'} />
-      <directionalLight position={[sun.x, sun.y, sun.z]} intensity={dusk ? 0.9 : 1.25} color={dusk ? '#ff9a5c' : '#fff5e6'} />
-      <hemisphereLight args={[dusk ? '#ffb070' : '#d0e4f8', '#3c3c38', dusk ? 0.45 : 0.4]} />
-    </>
-  );
 }
 
 function labelFromTags(kind: string, tags: Record<string, string>): HoverInfo {
@@ -275,8 +219,8 @@ export default function App() {
   useEffect(() => cmdStack.current.subscribe(() => setUndoTick((n) => n + 1)), []);
   const [hour, setHour] = useState(14);
   const [sceneOpen, setSceneOpen] = useState(false);
-  const [quality, setQuality] = useState<OsmQuality>('med');
-  const [showTrees, setShowTrees] = useState(true);
+  const [quality, setQuality] = useState<ModelQuality>('med');
+  const [fogAmount, setFogAmount] = useState(0.35);
   const [showGrid, setShowGrid] = useState(false);
   const [showNorth, setShowNorth] = useState(true);
   const [units, setUnits] = useState<'m' | 'ft'>('m');
@@ -308,7 +252,20 @@ export default function App() {
 
   useEffect(() => {
     setFacadeNightFactor(hour);
-  }, [hour]);
+    const night = nightFactorFromHour(hour);
+    if (osm) {
+      osm.group.traverse((obj) => {
+        if (obj.userData?.kind === 'street-lamp-light' && obj instanceof THREE.PointLight) {
+          const base = (obj.userData.baseIntensity as number) ?? 1.2;
+          obj.intensity = base * night;
+        }
+        if (obj.userData?.kind === 'street-lamp-head' && obj instanceof THREE.Mesh) {
+          const mat = obj.material as THREE.MeshStandardMaterial;
+          if (mat?.emissiveIntensity != null) mat.emissiveIntensity = 0.15 + night * 0.85;
+        }
+      });
+    }
+  }, [hour, osm]);
 
   const clearOsm = useCallback(() => {
     setOsm((prev) => {
@@ -330,7 +287,7 @@ export default function App() {
         const data = await fetchOsmFragment(bbox, { signal: ac.signal });
         const center = bboxCenter(bbox);
         const origin = createSceneOrigin(center.lat, center.lon);
-        const built = buildOsmContextLayer(data, origin, bbox, { quality, showTrees });
+        const built = buildOsmContextLayer(data, origin, bbox, { quality });
 
         clearOsm();
         setOsm({
@@ -363,7 +320,7 @@ export default function App() {
         setLoading(false);
       }
     },
-    [clearOsm, quality, showTrees, hour]
+    [clearOsm, quality, hour]
   );
 
   const handleRefresh = useCallback(() => {
@@ -467,13 +424,6 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [selected, performDelete, tool]);
 
-  useEffect(() => {
-    if (!osm) return;
-    osm.group.traverse((obj) => {
-      if (obj.userData?.kind === 'tree') obj.visible = showTrees;
-    });
-  }, [showTrees, osm]);
-
   const qualityRef = useRef(quality);
   useEffect(() => {
     if (qualityRef.current === quality) return;
@@ -533,7 +483,7 @@ export default function App() {
           gl.toneMappingExposure = 1.05;
         }}
       >
-        <Atmosphere hour={hour} />
+        <Atmosphere hour={hour} fogAmount={fogAmount} />
         <group>{osm && <primitive object={osm.group} />}</group>
         {showGrid && <gridHelper args={[2000, 40, '#3a3a3c', '#2c2c2e']} position={[0, 0.02, 0]} />}
         <ZoneMeshes zones={zones} />
@@ -771,8 +721,8 @@ export default function App() {
         onHour={setHour}
         quality={quality}
         onQuality={setQuality}
-        showTrees={showTrees}
-        onShowTrees={setShowTrees}
+        fogAmount={fogAmount}
+        onFogAmount={setFogAmount}
         showGrid={showGrid}
         onShowGrid={setShowGrid}
         showNorth={showNorth}
