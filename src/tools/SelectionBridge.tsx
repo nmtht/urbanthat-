@@ -8,6 +8,8 @@ export interface SelectedOsm {
   kind: string;
   label: string;
   objects: THREE.Object3D[];
+  zoneId?: string;
+  roadId?: string;
 }
 
 interface Props {
@@ -18,20 +20,20 @@ interface Props {
   onDeleteClick: (sel: SelectedOsm) => void;
 }
 
-function isPickableOsm(obj: THREE.Object3D): boolean {
+function isPickable(obj: THREE.Object3D): boolean {
   if (!obj.visible || obj.userData?.deleted) return false;
   if (obj.userData?.nonPickable) return false;
   const kind = obj.userData?.kind;
-  if (kind === 'user-road') return true;
+  if (kind === 'user-road' || kind === 'zone') return true;
   if (!kind || !obj.userData?.osmTags) return false;
   if (kind === 'road-pad' || kind === 'tree') return false;
   return true;
 }
 
-function findOsmRoot(obj: THREE.Object3D | null): THREE.Object3D | null {
+function findPickRoot(obj: THREE.Object3D | null): THREE.Object3D | null {
   let cur: THREE.Object3D | null = obj;
   while (cur) {
-    if (isPickableOsm(cur)) return cur;
+    if (isPickable(cur)) return cur;
     if (
       cur.parent &&
       cur.parent.userData?.kind === 'building' &&
@@ -54,6 +56,9 @@ function labelOf(obj: THREE.Object3D): string {
   if (kind === 'road' || kind === 'user-road') {
     return tags.name ?? tags.highway ?? 'road';
   }
+  if (kind === 'zone') {
+    return tags.name ?? tags.landuse ?? 'zone';
+  }
   return tags.name ?? kind;
 }
 
@@ -63,6 +68,7 @@ function matchKey(obj: THREE.Object3D): string {
   if (kind === 'building') return `building:${tags.building ?? 'yes'}`;
   if (kind === 'road') return `highway:${tags.highway ?? 'road'}`;
   if (kind === 'user-road') return `user-road:${obj.userData?.roadId ?? ''}`;
+  if (kind === 'zone') return `zone:${obj.userData?.zoneId ?? ''}`;
   return `${kind}:${tags.name ?? ''}`;
 }
 
@@ -91,6 +97,11 @@ function boostObject(root: THREE.Object3D) {
         s.emissive = new THREE.Color('#4a9eff');
         s.emissiveIntensity = 0.45;
         s.needsUpdate = true;
+      } else if ((c as THREE.MeshBasicMaterial).isMeshBasicMaterial) {
+        const b = c as THREE.MeshBasicMaterial;
+        b.color = b.color.clone().lerp(new THREE.Color('#4a9eff'), 0.35);
+        b.opacity = Math.min(1, (b.opacity ?? 1) * 1.4);
+        b.needsUpdate = true;
       }
       return c;
     };
@@ -130,25 +141,33 @@ export function SelectionBridge({ tool, enabled, selected, onSelect, onDeleteCli
       raycaster.setFromCamera(pointer, camera);
       const osmGroup = scene.getObjectByName('OsmContextLayer');
       const userRoads = scene.getObjectByName('UserRoadsLayer');
+      const zones = scene.getObjectByName('Zones');
       const roots: THREE.Object3D[] = [];
+      if (zones) roots.push(zones);
       if (userRoads) roots.push(userRoads);
       if (osmGroup) roots.push(osmGroup);
       if (!roots.length) roots.push(...scene.children);
       const hits = raycaster.intersectObjects(roots, true);
-      let bestRoad: THREE.Object3D | null = null;
+
+      let bestZone: THREE.Object3D | null = null;
       let bestUserRoad: THREE.Object3D | null = null;
+      let bestRoad: THREE.Object3D | null = null;
       for (const hit of hits) {
         if (!hit.object.visible) continue;
-        const root = findOsmRoot(hit.object);
+        const root = findPickRoot(hit.object);
         if (!root || !root.visible || root.userData.deleted) continue;
         if (root.userData.kind === 'building') return root;
+        if (root.userData.kind === 'zone') {
+          if (!bestZone) bestZone = root;
+          continue;
+        }
         if (root.userData.kind === 'user-road') {
           if (!bestUserRoad) bestUserRoad = root;
           continue;
         }
         if (!bestRoad) bestRoad = root;
       }
-      return bestUserRoad ?? bestRoad;
+      return bestZone ?? bestUserRoad ?? bestRoad;
     };
 
     const collectSameTag = (seed: THREE.Object3D): THREE.Object3D[] => {
@@ -156,11 +175,20 @@ export function SelectionBridge({ tool, enabled, selected, onSelect, onDeleteCli
       const out: THREE.Object3D[] = [];
       const osmGroup = scene.getObjectByName('OsmContextLayer');
       (osmGroup ?? scene).traverse((obj) => {
-        if (!isPickableOsm(obj)) return;
+        if (!isPickable(obj)) return;
         if (matchKey(obj) === key) out.push(obj);
       });
       return out.length ? out : [seed];
     };
+
+    const toSel = (hit: THREE.Object3D, objects: THREE.Object3D[]): SelectedOsm => ({
+      object: hit,
+      kind: String(hit.userData.kind),
+      label: labelOf(hit),
+      objects,
+      zoneId: hit.userData.zoneId as string | undefined,
+      roadId: hit.userData.roadId as string | undefined,
+    });
 
     const onPointerDown = (ev: PointerEvent) => {
       if (ev.button !== 0) return;
@@ -180,14 +208,7 @@ export function SelectionBridge({ tool, enabled, selected, onSelect, onDeleteCli
       const now = Date.now();
 
       if (t === 'delete') {
-        if (hit) {
-          onDeleteRef.current({
-            object: hit,
-            kind: String(hit.userData.kind),
-            label: labelOf(hit),
-            objects: [hit],
-          });
-        }
+        if (hit) onDeleteRef.current(toSel(hit, [hit]));
         return;
       }
 
@@ -204,21 +225,11 @@ export function SelectionBridge({ tool, enabled, selected, onSelect, onDeleteCli
         lastClick.current && lastClick.current.key === key && now - lastClick.current.t < 350;
       lastClick.current = { t: now, key };
 
-      if (isDouble && hit.userData.kind !== 'user-road') {
+      if (isDouble && hit.userData.kind !== 'user-road' && hit.userData.kind !== 'zone') {
         const all = collectSameTag(hit);
-        onSelectRef.current({
-          object: hit,
-          kind: String(hit.userData.kind),
-          label: `${labelOf(hit)} ×${all.length}`,
-          objects: all,
-        });
+        onSelectRef.current(toSel(hit, all));
       } else {
-        onSelectRef.current({
-          object: hit,
-          kind: String(hit.userData.kind),
-          label: labelOf(hit),
-          objects: [hit],
-        });
+        onSelectRef.current(toSel(hit, [hit]));
       }
     };
 
