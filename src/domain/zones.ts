@@ -1,13 +1,17 @@
+import type { Point2D } from './SceneOrigin';
+
 export type ZoneType = 'residential' | 'commercial' | 'industrial' | 'park';
 
+/** Axis-aligned rectangle zone (legacy + rect mode). */
 export interface ZoneRect {
   id: string;
   type: ZoneType;
-  /** Local metric XY (same as OSM layer). */
   minX: number;
   maxX: number;
   minY: number;
   maxY: number;
+  /** Optional polygon outline in local XY (polygon / freehand modes). */
+  polygon?: Point2D[];
 }
 
 export const ZONE_COLORS: Record<ZoneType, string> = {

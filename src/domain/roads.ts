@@ -1,10 +1,23 @@
 import type { Point2D } from './SceneOrigin';
 
+/** Per-road overrides applied on top of the base profile. */
+export interface RoadOptions {
+  /** Number of traffic lanes (1–6). */
+  lanes?: number;
+  /** Parallel parking strip width per side, metres (0 = off). */
+  parkingM?: number;
+  /** Green buffer / verge width per side, metres (0 = off). */
+  greenBufferM?: number;
+  /** Sidewalk width override (undefined = profile default). */
+  sidewalkM?: number;
+}
+
 /** User-drawn road centerline in local metric XY (same SK as OSM). */
 export interface RoadCenterline {
   id: string;
   points: Point2D[];
   profileId: RoadProfileId;
+  options?: RoadOptions;
   tags?: Record<string, string>;
 }
 
@@ -18,6 +31,7 @@ export type RoadProfileId =
 export interface RoadProfile {
   id: RoadProfileId;
   label: string;
+  /** Base carriageway width for default lane count. */
   widthM: number;
   lanes: number;
   centerLine: boolean;
@@ -96,3 +110,43 @@ export const ROAD_PROFILE_ORDER: RoadProfileId[] = [
 export function getRoadProfile(id: RoadProfileId): RoadProfile {
   return ROAD_PROFILES[id] ?? ROAD_PROFILES.residential;
 }
+
+const LANE_WIDTH_M = 3.25;
+
+/**
+ * Effective geometry sizes for a road (profile defaults + options).
+ */
+export function resolveRoadGeometry(
+  profileId: RoadProfileId,
+  options?: RoadOptions
+): {
+  profile: RoadProfile;
+  lanes: number;
+  carriageWidthM: number;
+  parkingM: number;
+  greenBufferM: number;
+  sidewalkM: number;
+  totalHalfM: number;
+} {
+  const profile = getRoadProfile(profileId);
+  const lanes = Math.max(1, Math.min(6, options?.lanes ?? profile.lanes));
+  const parkingM = Math.max(0, options?.parkingM ?? 0);
+  const greenBufferM = Math.max(0, options?.greenBufferM ?? 0);
+  const sidewalkM =
+    options?.sidewalkM !== undefined ? Math.max(0, options.sidewalkM) : profile.sidewalkM;
+  const baseLaneW = profile.widthM / Math.max(1, profile.lanes);
+  const carriageWidthM = lanes * (Number.isFinite(baseLaneW) ? baseLaneW : LANE_WIDTH_M);
+  const totalHalfM = carriageWidthM / 2 + parkingM + greenBufferM;
+  return {
+    profile,
+    lanes,
+    carriageWidthM,
+    parkingM,
+    greenBufferM,
+    sidewalkM,
+    totalHalfM,
+  };
+}
+
+export type DrawMode = 'straight' | 'curve' | 'freehand';
+export type ZoneDrawMode = 'rect' | 'polygon' | 'freehand';
