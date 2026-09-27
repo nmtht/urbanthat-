@@ -18,10 +18,7 @@ const MIN_SIZE = 4;
 const FREEHAND_SAMPLE = 2.0;
 
 function bboxOf(pts: Point2D[]) {
-  let minX = Infinity,
-    maxX = -Infinity,
-    minY = Infinity,
-    maxY = -Infinity;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (const p of pts) {
     if (p.x < minX) minX = p.x;
     if (p.x > maxX) maxX = p.x;
@@ -108,21 +105,14 @@ export function ZoneBridge({ enabled, zoneType, drawMode, onCommit, onDrawingAct
         polyDraft.current = [p];
         bump();
       }
-      try {
-        el.setPointerCapture(ev.pointerId);
-      } catch {
-        /* ignore */
-      }
+      try { el.setPointerCapture(ev.pointerId); } catch { /* ignore */ }
     };
 
     const onMove = (ev: PointerEvent) => {
       const p = toLocal(ev.clientX, ev.clientY);
       if (!p) return;
       cursor.current = p;
-      if (!dragging.current) {
-        bump();
-        return;
-      }
+      if (!dragging.current) { bump(); return; }
       const mode = modeRef.current;
       if (mode === 'rect' && rectDrag.current) {
         rectDrag.current.x1 = p.x;
@@ -140,11 +130,7 @@ export function ZoneBridge({ enabled, zoneType, drawMode, onCommit, onDrawingAct
 
     const onUp = (ev: PointerEvent) => {
       if (ev.button !== 0) return;
-      try {
-        el.releasePointerCapture(ev.pointerId);
-      } catch {
-        /* ignore */
-      }
+      try { el.releasePointerCapture(ev.pointerId); } catch { /* ignore */ }
       dragging.current = false;
       const mode = modeRef.current;
       const p = toLocal(ev.clientX, ev.clientY);
@@ -159,14 +145,7 @@ export function ZoneBridge({ enabled, zoneType, drawMode, onCommit, onDrawingAct
         const minY = Math.min(d.y0, d.y1);
         const maxY = Math.max(d.y0, d.y1);
         if (maxX - minX < MIN_SIZE || maxY - minY < MIN_SIZE) return;
-        onCommitRef.current({
-          id: `zone-${Date.now()}`,
-          type: typeRef.current,
-          minX,
-          maxX,
-          minY,
-          maxY,
-        });
+        onCommitRef.current({ id: `zone-${Date.now()}`, type: typeRef.current, minX, maxX, minY, maxY });
         if (previewRect.current) previewRect.current.visible = false;
         return;
       }
@@ -181,21 +160,10 @@ export function ZoneBridge({ enabled, zoneType, drawMode, onCommit, onDrawingAct
         const pts = polyDraft.current;
         polyDraft.current = [];
         onDrawRef.current?.(false);
-        if (pts.length < 3) {
-          bump();
-          return;
-        }
+        if (pts.length < 3) { bump(); return; }
         const bb = bboxOf(pts);
-        if (bb.maxX - bb.minX < MIN_SIZE || bb.maxY - bb.minY < MIN_SIZE) {
-          bump();
-          return;
-        }
-        onCommitRef.current({
-          id: `zone-${Date.now()}`,
-          type: typeRef.current,
-          ...bb,
-          polygon: pts,
-        });
+        if (bb.maxX - bb.minX < MIN_SIZE || bb.maxY - bb.minY < MIN_SIZE) { bump(); return; }
+        onCommitRef.current({ id: `zone-${Date.now()}`, type: typeRef.current, ...bb, polygon: pts });
         bump();
         return;
       }
@@ -211,12 +179,7 @@ export function ZoneBridge({ enabled, zoneType, drawMode, onCommit, onDrawingAct
         onDrawRef.current?.(false);
         if (pts.length >= 3) {
           const bb = bboxOf(pts);
-          onCommitRef.current({
-            id: `zone-${Date.now()}`,
-            type: typeRef.current,
-            ...bb,
-            polygon: pts,
-          });
+          onCommitRef.current({ id: `zone-${Date.now()}`, type: typeRef.current, ...bb, polygon: pts });
         }
         bump();
         return;
@@ -226,10 +189,7 @@ export function ZoneBridge({ enabled, zoneType, drawMode, onCommit, onDrawingAct
         polyDraft.current = [p];
       } else {
         const last = polyDraft.current[polyDraft.current.length - 1];
-        if (Math.hypot(p.x - last.x, p.y - last.y) < 1.0) {
-          bump();
-          return;
-        }
+        if (Math.hypot(p.x - last.x, p.y - last.y) < 1.0) { bump(); return; }
         polyDraft.current = [...polyDraft.current, p];
       }
       onDrawRef.current?.(true);
@@ -252,12 +212,7 @@ export function ZoneBridge({ enabled, zoneType, drawMode, onCommit, onDrawingAct
         polyDraft.current = [];
         onDrawRef.current?.(false);
         const bb = bboxOf(pts);
-        onCommitRef.current({
-          id: `zone-${Date.now()}`,
-          type: typeRef.current,
-          ...bb,
-          polygon: pts,
-        });
+        onCommitRef.current({ id: `zone-${Date.now()}`, type: typeRef.current, ...bb, polygon: pts });
         bump();
       }
     };
@@ -316,21 +271,13 @@ export function ZoneBridge({ enabled, zoneType, drawMode, onCommit, onDrawingAct
     if (pts.length < 2) return;
 
     const positions: number[] = [];
-    for (const p of pts) {
-      positions.push(p.x, 0.04, -p.y);
-    }
-    if (pts.length >= 3) {
-      positions.push(pts[0].x, 0.04, -pts[0].y);
-    }
+    for (const p of pts) positions.push(p.x, 0.04, -p.y);
+    if (pts.length >= 3) positions.push(pts[0].x, 0.04, -pts[0].y);
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     const line = new THREE.Line(
       g,
-      new THREE.LineBasicMaterial({
-        color: ZONE_COLORS[typeRef.current],
-        transparent: true,
-        opacity: 0.9,
-      })
+      new THREE.LineBasicMaterial({ color: ZONE_COLORS[typeRef.current], transparent: true, opacity: 0.9 })
     );
     line.userData.nonPickable = true;
     group.add(line);
@@ -356,9 +303,7 @@ export function ZoneBridge({ enabled, zoneType, drawMode, onCommit, onDrawingAct
         );
         m.userData.nonPickable = true;
         group.add(m);
-      } catch {
-        /* ignore */
-      }
+      } catch { /* ignore */ }
     }
   });
 
@@ -373,7 +318,6 @@ export function ZoneBridge({ enabled, zoneType, drawMode, onCommit, onDrawingAct
   );
 }
 
-/** Outline-only boundary — no fill so interior zones stay pickable. */
 function BoundaryOutline({ zone }: { zone: ZoneRect }) {
   const geom = useMemo(() => {
     const pts: Point2D[] =
@@ -386,9 +330,7 @@ function BoundaryOutline({ zone }: { zone: ZoneRect }) {
             { x: zone.minX, y: zone.maxY },
           ];
     const positions: number[] = [];
-    for (const p of pts) {
-      positions.push(p.x, 0.04, -p.y);
-    }
+    for (const p of pts) positions.push(p.x, 0.04, -p.y);
     positions.push(pts[0].x, 0.04, -pts[0].y);
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
@@ -419,6 +361,10 @@ export function ZoneMeshes({ zones }: { zones: ZoneRect[] }) {
           return <BoundaryOutline key={z.id} zone={z} />;
         }
 
+        const color = ZONE_COLORS[z.type];
+        // Remount when type/color changes so viewport colour updates immediately
+        const meshKey = `${z.id}-${z.type}-${color}`;
+
         if (z.polygon && z.polygon.length >= 3) {
           const shape = new THREE.Shape();
           shape.moveTo(z.polygon[0].x, z.polygon[0].y);
@@ -428,7 +374,7 @@ export function ZoneMeshes({ zones }: { zones: ZoneRect[] }) {
           shape.closePath();
           return (
             <mesh
-              key={z.id}
+              key={meshKey}
               rotation={[-Math.PI / 2, 0, 0]}
               position={[0, 0.025, 0]}
               userData={{
@@ -441,7 +387,8 @@ export function ZoneMeshes({ zones }: { zones: ZoneRect[] }) {
             >
               <shapeGeometry args={[shape]} />
               <meshBasicMaterial
-                color={ZONE_COLORS[z.type]}
+                key={color}
+                color={color}
                 transparent
                 opacity={0.28}
                 depthWrite={false}
@@ -454,7 +401,7 @@ export function ZoneMeshes({ zones }: { zones: ZoneRect[] }) {
         const h = z.maxY - z.minY;
         return (
           <mesh
-            key={z.id}
+            key={meshKey}
             rotation={[-Math.PI / 2, 0, 0]}
             position={[(z.minX + z.maxX) / 2, 0.025, -(z.minY + z.maxY) / 2]}
             scale={[w, 1, h]}
@@ -468,7 +415,8 @@ export function ZoneMeshes({ zones }: { zones: ZoneRect[] }) {
           >
             <planeGeometry args={[1, 1]} />
             <meshBasicMaterial
-              color={ZONE_COLORS[z.type]}
+              key={color}
+              color={color}
               transparent
               opacity={0.28}
               depthWrite={false}
