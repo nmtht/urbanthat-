@@ -150,24 +150,14 @@ function polyCentroid(poly: Point2D[]): Point2D {
   return { x: cx / poly.length, y: cy / poly.length };
 }
 
-/**
- * Perimeter ring along actual polygon edges.
- * One bar per edge, shifted inward; shortened at corners so nothing pokes outside.
- */
 function parcelizePerimeterAlongEdges(
-  poly: Point2D[],
-  setbackM: number,
-  parcelDepthM: number,
-  coverage: number,
-  minW: number,
-  minD: number
+  poly: Point2D[], setbackM: number, parcelDepthM: number, coverage: number, minW: number, minD: number
 ): ParcelCell[] {
   if (poly.length < 3) return [];
   const area = Math.abs(signedArea(poly));
   if (area < 20) return [];
   const ccw = signedArea(poly) > 0;
   const centroid = polyCentroid(poly);
-
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (const p of poly) {
     minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
@@ -175,10 +165,8 @@ function parcelizePerimeterAlongEdges(
   }
   const charSize = Math.min(maxX - minX, maxY - minY);
   if (charSize < 10) return [];
-
   let depth = Math.min(parcelDepthM, charSize * 0.28, Math.max(minD, 10));
   depth = Math.max(4, depth);
-
   let perimeter = 0;
   for (let i = 0; i < poly.length; i++) {
     const a = poly[i], b = poly[(i + 1) % poly.length];
@@ -187,12 +175,10 @@ function parcelizePerimeterAlongEdges(
   const ringApprox = perimeter * depth;
   const covScale = Math.min(1, Math.max(0.55, (coverage * area) / Math.max(1, ringApprox)));
   depth = Math.max(4, depth * Math.sqrt(covScale));
-
   const insetDist = setbackM + depth / 2 + 0.3;
   const cornerCut = depth * 0.65 + setbackM * 0.25;
   const cells: ParcelCell[] = [];
   const n = poly.length;
-
   for (let i = 0; i < n; i++) {
     const a = poly[i], b = poly[(i + 1) % n];
     const dx = b.x - a.x, dy = b.y - a.y;
@@ -299,17 +285,110 @@ function parcelizeRandom(
   return cells;
 }
 
-function parcelizeCorridor(
-  box: { minX: number; maxX: number; minY: number; maxY: number },
-  parcelDepthM: number, coverage: number, minW: number
-): ParcelCell[] {
-  const W = box.maxX - box.minX, D = box.maxY - box.minY;
-  const alongX = W >= D;
-  const depth = Math.min(parcelDepthM, (alongX ? D : W) * 0.7);
-  if (alongX) {
-    return [{ cx: (box.minX + box.maxX) / 2, cy: (box.minY + box.maxY) / 2, w: W * 0.92, d: Math.max(minW, depth * Math.sqrt(coverage)), parcelArea: W * D }];
+/** Principal direction: longest vertex-to-vertex chord. */
+function principalAxis(poly: Point2D[]): { ux: number; uy: number; len: number } {
+  let best = 0, ux = 1, uy = 0;
+  for (let i = 0; i < poly.length; i++) {
+    for (let j = i + 1; j < poly.length; j++) {
+      const dx = poly[j].x - poly[i].x, dy = poly[j].y - poly[i].y;
+      const len = Math.hypot(dx, dy);
+      if (len > best) { best = len; ux = dx / len; uy = dy / len; }
+    }
   }
-  return [{ cx: (box.minX + box.maxX) / 2, cy: (box.minY + box.maxY) / 2, w: Math.max(minW, depth * Math.sqrt(coverage)), d: D * 0.92, parcelArea: W * D }];
+  return { ux, uy, len: best };
+}
+
+/**
+ * Corridor: long bar(s) along principal axis, strictly inside the polygon.
+ * Shrinks to fit; if coverage is high / single bar fails → two parallel bars.
+ * Smaller footprint is compensated by heightFromFar (more floors).
+ */
+function parcelizeCorridor(
+  poly: Point2D[],
+  box: { minX: number; maxX: number; minY: number; maxY: number },
+  parcelDepthM: number,
+  coverage: number,
+  minW: number,
+  setbackM: number
+): ParcelCell[] {
+  const area = Math.abs(signedArea(poly));
+  if (area < 20) return [];
+  const centroid = polyCentroid(poly);
+  const { ux, uy, len: longLen } = principalAxis(poly);
+  const nx = -uy, ny = ux;
+  const rot = Math.atan2(uy, ux);
+
+  let tMin = Infinity, tMax = -Infinity, nMin = Infinity, nMax = -Infinity;
+  for (const p of poly) {
+    const t = (p.x - centroid.x) * ux + (p.y - centroid.y) * uy;
+    const n = (p.x - centroid.x) * nx + (p.y - centroid.y) * ny;
+    tMin = Math.min(tMin, t); tMax = Math.max(tMax, t);
+    nMin = Math.min(nMin, n); nMax = Math.max(nMax, n);
+  }
+  const axisSpan = tMax - tMin, normalSpan = nMax - nMin;
+  if (axisSpan < 8 || normalSpan < 4) return [];
+
+  const targetDepth = Math.min(parcelDepthM, normalSpan * 0.55, Math.max(minW, 8));
+  const pad = Math.max(0.4, setbackM * 0.5);
+  const maxLen = Math.max(minW, axisSpan - 2 * pad);
+  const maxDepth = Math.max(4, normalSpan - 2 * pad);
+
+  function trySingle(len: number, depth: number): ParcelCell | null {
+    let L = len, D = depth;
+    for (let step = 0; step < 12; step++) {
+      const fp = rectFootprint(centroid.x, centroid.y, L, D, rot);
+      if (footprintMostlyInside(fp, poly)) {
+        return { cx: centroid.x, cy: centroid.y, w: L, d: D, parcelArea: area, rot };
+      }
+      L *= 0.92; D *= 0.94;
+      if (L < minW * 0.6 || D < 3) break;
+    }
+    return null;
+  }
+
+  function tryDouble(len: number, depth: number): ParcelCell[] {
+    const gap = Math.max(4, Math.min(depth * 0.8, normalSpan * 0.2));
+    const halfOff = (depth + gap) / 2;
+    if (halfOff * 2 + depth > normalSpan - pad) return [];
+    const cells: ParcelCell[] = [];
+    for (const sign of [-1, 1] as const) {
+      let L = len, D = depth;
+      const ox = centroid.x + nx * halfOff * sign;
+      const oy = centroid.y + ny * halfOff * sign;
+      let placed: ParcelCell | null = null;
+      for (let step = 0; step < 12; step++) {
+        const fp = rectFootprint(ox, oy, L, D, rot);
+        if (footprintMostlyInside(fp, poly)) {
+          placed = { cx: ox, cy: oy, w: L, d: D, parcelArea: area / 2, rot };
+          break;
+        }
+        L *= 0.92; D *= 0.94;
+        if (L < minW * 0.5 || D < 3) break;
+      }
+      if (placed) cells.push(placed);
+    }
+    return cells;
+  }
+
+  let depth = Math.min(targetDepth * Math.sqrt(Math.max(0.4, coverage)), maxDepth * 0.7);
+  depth = Math.max(4, depth);
+  let len = Math.min(maxLen * 0.95, longLen * 0.85);
+
+  const single = trySingle(len, depth);
+  if (single) {
+    const fpA = single.w * single.d;
+    if (coverage > 0.35 && fpA < area * coverage * 0.7 && normalSpan > depth * 3) {
+      const dbl = tryDouble(len * 0.9, depth * 0.55);
+      if (dbl.length >= 2) return dbl;
+    }
+    return [single];
+  }
+
+  const dbl = tryDouble(len * 0.85, depth * 0.5);
+  if (dbl.length >= 1) return dbl;
+
+  const fallback = trySingle(Math.min(maxLen * 0.6, minW * 2), Math.min(maxDepth * 0.5, minW));
+  return fallback ? [fallback] : [];
 }
 
 export interface GenerateOptions {
@@ -345,13 +424,13 @@ export function generateBuildingsForZone(
       if (!inset) return [];
       cells = parcelizeRandom(inset, poly, params.coverage, min.w, min.d, rng);
       break;
-    case 'corridor':
-      if (!inset) return [];
-      cells = parcelizeCorridor(inset, params.parcelDepthM, params.coverage, min.w);
+    case 'corridor': {
+      const boxForCorridor = inset ?? { minX, maxX, minY, maxY };
+      cells = parcelizeCorridor(poly, boxForCorridor, params.parcelDepthM, params.coverage, min.w, setback);
       break;
+    }
     case 'block':
     default: {
-      // Follow actual polygon edges for freehand / irregular zones
       if (isNearlyRect(poly) && inset) {
         cells = parcelizePerimeterRect(inset, params.parcelDepthM, params.coverage, min.d);
       } else {
@@ -373,7 +452,6 @@ export function generateBuildingsForZone(
     let fpA = footprintArea(fp);
     if (fpA < 4) continue;
 
-    // Enforce inside-zone for every form (shrink up to 2 times)
     if (!footprintMostlyInside(fp, poly)) {
       w *= 0.9; d *= 0.9;
       fp = rectFootprint(cell.cx, cell.cy, w, d, rot);
