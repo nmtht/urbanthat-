@@ -1,13 +1,16 @@
 /**
- * Zone → GeneratedBuilding[] pipeline (Sprint 4).
- * Perimeter = closed ring along the actual polygon edges (not AABB),
- * buildings stay strictly inside the zone.
+ * Zone content pipeline (Sprint 4).
+ * generateZoneContent → { buildings, driveways, courtyards }
+ * Buildings stay strictly inside the zone polygon.
  */
 
 import type { Point2D } from '../domain/SceneOrigin';
 import type {
   GeneratedBuilding,
   ZoneBuildForm,
+  ZoneCourtyard,
+  ZoneDriveway,
+  ZoneGeneratedContent,
   ZoneRect,
   ZoneType,
 } from '../domain/zones';
@@ -241,19 +244,42 @@ function isNearlyRect(poly: Point2D[]): boolean {
   return true;
 }
 
+/** Tower: single compact footprint at centroid, shrink until inside. */
 function parcelizeTower(
-  box: { minX: number; maxX: number; minY: number; maxY: number },
-  coverage: number, minW: number, rng: () => number
+  poly: Point2D[], coverage: number, minW: number, setbackM: number, rng: () => number
 ): ParcelCell[] {
-  const W = box.maxX - box.minX, D = box.maxY - box.minY, area = W * D;
-  const targetFp = area * Math.min(0.18, coverage * 0.35);
-  const side = Math.max(minW, Math.sqrt(targetFp));
-  const s = side * (0.9 + rng() * 0.15);
-  return [{
-    cx: (box.minX + box.maxX) / 2 + (rng() - 0.5) * 2,
-    cy: (box.minY + box.maxY) / 2 + (rng() - 0.5) * 2,
-    w: s, d: s * (0.75 + rng() * 0.35), parcelArea: area,
-  }];
+  const area = Math.abs(signedArea(poly));
+  if (area < 20) return [];
+  const centroid = polyCentroid(poly);
+  const jitter = Math.min(3, Math.sqrt(area) * 0.02);
+  const cx = centroid.x + (rng() - 0.5) * jitter;
+  const cy = centroid.y + (rng() - 0.5) * jitter;
+  const targetFp = area * Math.min(0.15, Math.max(0.04, coverage * 0.4));
+  let side = Math.max(minW * 0.85, Math.sqrt(targetFp));
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of poly) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  const char = Math.min(maxX - minX, maxY - minY) - 2 * Math.max(0, setbackM);
+  side = Math.min(side, Math.max(minW * 0.7, char * 0.35));
+  const aspect = 0.75 + rng() * 0.35;
+  let w = side, d = side * aspect;
+  const rot = (rng() - 0.5) * ((12 * Math.PI) / 180);
+  for (let step = 0; step < 14; step++) {
+    const fp = rectFootprint(cx, cy, w, d, rot);
+    if (footprintMostlyInside(fp, poly)) {
+      return [{ cx, cy, w, d, parcelArea: area, rot }];
+    }
+    w *= 0.9; d *= 0.9;
+    if (w < minW * 0.5 || d < minW * 0.5) break;
+  }
+  const s = Math.max(4, minW * 0.55);
+  const fp = rectFootprint(centroid.x, centroid.y, s, s, 0);
+  if (footprintMostlyInside(fp, poly)) {
+    return [{ cx: centroid.x, cy: centroid.y, w: s, d: s, parcelArea: area, rot: 0 }];
+  }
+  return [];
 }
 
 function parcelizeRandom(
@@ -285,7 +311,6 @@ function parcelizeRandom(
   return cells;
 }
 
-/** Principal direction: longest vertex-to-vertex chord. */
 function principalAxis(poly: Point2D[]): { ux: number; uy: number; len: number } {
   let best = 0, ux = 1, uy = 0;
   for (let i = 0; i < poly.length; i++) {
@@ -298,18 +323,10 @@ function principalAxis(poly: Point2D[]): { ux: number; uy: number; len: number }
   return { ux, uy, len: best };
 }
 
-/**
- * Corridor: long bar(s) along principal axis, strictly inside the polygon.
- * Shrinks to fit; if coverage is high / single bar fails → two parallel bars.
- * Smaller footprint is compensated by heightFromFar (more floors).
- */
 function parcelizeCorridor(
   poly: Point2D[],
   box: { minX: number; maxX: number; minY: number; maxY: number },
-  parcelDepthM: number,
-  coverage: number,
-  minW: number,
-  setbackM: number
+  parcelDepthM: number, coverage: number, minW: number, setbackM: number
 ): ParcelCell[] {
   const area = Math.abs(signedArea(poly));
   if (area < 20) return [];
@@ -317,7 +334,6 @@ function parcelizeCorridor(
   const { ux, uy, len: longLen } = principalAxis(poly);
   const nx = -uy, ny = ux;
   const rot = Math.atan2(uy, ux);
-
   let tMin = Infinity, tMax = -Infinity, nMin = Infinity, nMax = -Infinity;
   for (const p of poly) {
     const t = (p.x - centroid.x) * ux + (p.y - centroid.y) * uy;
@@ -327,7 +343,6 @@ function parcelizeCorridor(
   }
   const axisSpan = tMax - tMin, normalSpan = nMax - nMin;
   if (axisSpan < 8 || normalSpan < 4) return [];
-
   const targetDepth = Math.min(parcelDepthM, normalSpan * 0.55, Math.max(minW, 8));
   const pad = Math.max(0.4, setbackM * 0.5);
   const maxLen = Math.max(minW, axisSpan - 2 * pad);
@@ -373,7 +388,6 @@ function parcelizeCorridor(
   let depth = Math.min(targetDepth * Math.sqrt(Math.max(0.4, coverage)), maxDepth * 0.7);
   depth = Math.max(4, depth);
   let len = Math.min(maxLen * 0.95, longLen * 0.85);
-
   const single = trySingle(len, depth);
   if (single) {
     const fpA = single.w * single.d;
@@ -383,10 +397,8 @@ function parcelizeCorridor(
     }
     return [single];
   }
-
   const dbl = tryDouble(len * 0.85, depth * 0.5);
   if (dbl.length >= 1) return dbl;
-
   const fallback = trySingle(Math.min(maxLen * 0.6, minW * 2), Math.min(maxDepth * 0.5, minW));
   return fallback ? [fallback] : [];
 }
@@ -395,12 +407,18 @@ export interface GenerateOptions {
   roads?: { points: Point2D[]; halfWidthM: number }[];
 }
 
-export function generateBuildingsForZone(
-  zone: ZoneRect, _opts: GenerateOptions = {}
-): GeneratedBuilding[] {
-  if (zone.type === 'boundary' || zone.type === 'park') return [];
+/**
+ * Full zone content pipeline.
+ * Order (future): driveways → courtyards → buildings on residual.
+ * For now: buildings only; driveways/courtyards empty (stable contract).
+ */
+export function generateZoneContent(
+  zone: ZoneRect, opts: GenerateOptions = {}
+): ZoneGeneratedContent {
+  const empty: ZoneGeneratedContent = { buildings: [], driveways: [], courtyards: [] };
+  if (zone.type === 'boundary' || zone.type === 'park') return empty;
   const params = resolveZoneParams(zone);
-  if (params.buildForm === 'open' || params.coverage <= 0 || params.far <= 0) return [];
+  if (params.buildForm === 'open' || params.coverage <= 0 || params.far <= 0) return empty;
 
   const poly = zonePolygon(zone);
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
@@ -408,21 +426,21 @@ export function generateBuildingsForZone(
     minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
     minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
   }
-
   const setback = Math.max(0, params.setbackM);
   const inset = insetBBox(minX, maxX, minY, maxY, setback);
   const rng = mulberry32(params.seed);
   const min = MIN_FOOTPRINT[zone.type] ?? MIN_FOOTPRINT.residential;
 
+  const driveways: ZoneDriveway[] = [];
+  const courtyards: ZoneCourtyard[] = [];
+
   let cells: ParcelCell[] = [];
   switch (params.buildForm) {
     case 'tower':
-      if (!inset) return [];
-      cells = parcelizeTower(inset, params.coverage, min.w, rng);
+      cells = parcelizeTower(poly, params.coverage, min.w, setback, rng);
       break;
     case 'random':
-      if (!inset) return [];
-      cells = parcelizeRandom(inset, poly, params.coverage, min.w, min.d, rng);
+      if (inset) cells = parcelizeRandom(inset, poly, params.coverage, min.w, min.d, rng);
       break;
     case 'corridor': {
       const boxForCorridor = inset ?? { minX, maxX, minY, maxY };
@@ -443,7 +461,7 @@ export function generateBuildingsForZone(
     }
   }
 
-  const out: GeneratedBuilding[] = [];
+  const buildings: GeneratedBuilding[] = [];
   for (let i = 0; i < cells.length; i++) {
     const cell = cells[i];
     const rot = cell.rot ?? 0;
@@ -451,7 +469,6 @@ export function generateBuildingsForZone(
     let fp = rectFootprint(cell.cx, cell.cy, w, d, rot);
     let fpA = footprintArea(fp);
     if (fpA < 4) continue;
-
     if (!footprintMostlyInside(fp, poly)) {
       w *= 0.9; d *= 0.9;
       fp = rectFootprint(cell.cx, cell.cy, w, d, rot);
@@ -463,7 +480,6 @@ export function generateBuildingsForZone(
         if (!footprintMostlyInside(fp, poly)) continue;
       }
     }
-
     let { heightM, floors } = heightFromFar(params.far, cell.parcelArea, fpA, params.maxFloors, FLOOR_HEIGHT_M);
     if (params.buildForm === 'random') {
       const factor = 0.55 + rng() * 0.9;
@@ -471,15 +487,23 @@ export function generateBuildingsForZone(
       heightM = floors * FLOOR_HEIGHT_M;
     }
     if (params.buildForm === 'tower') {
-      floors = Math.max(floors, Math.min(params.maxFloors, Math.max(4, Math.round(params.maxFloors * 0.85))));
+      floors = Math.max(floors, Math.min(params.maxFloors, Math.max(6, Math.round(params.maxFloors * 0.9))));
       heightM = floors * FLOOR_HEIGHT_M;
     }
-    out.push({
+    buildings.push({
       id: uid(zone.id, i, params.seed), zoneId: zone.id, footprint: fp,
       heightM, floors, type: zone.type, buildForm: params.buildForm,
     });
   }
-  return out;
+  void opts;
+  return { buildings, driveways, courtyards };
+}
+
+/** Backward-compatible wrapper — buildings only. */
+export function generateBuildingsForZone(
+  zone: ZoneRect, opts: GenerateOptions = {}
+): GeneratedBuilding[] {
+  return generateZoneContent(zone, opts).buildings;
 }
 
 export function actualFar(buildings: GeneratedBuilding[], zone: ZoneRect): number {
