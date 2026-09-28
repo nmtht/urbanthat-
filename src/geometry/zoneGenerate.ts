@@ -1,6 +1,7 @@
 /**
  * Zone → GeneratedBuilding[] pipeline (Sprint 4).
- * Perimeter = closed courtyard ring strictly inside the zone.
+ * Perimeter = closed ring along the actual polygon edges (not AABB),
+ * buildings stay strictly inside the zone.
  */
 
 import type { Point2D } from '../domain/SceneOrigin';
@@ -77,7 +78,6 @@ function pointInPoly(pt: Point2D, poly: Point2D[]): boolean {
   return inside;
 }
 
-/** Soft containment: centroid must be inside, majority of corners too. */
 function footprintMostlyInside(fp: Point2D[], poly: Point2D[]): boolean {
   if (fp.length < 3) return false;
   let cx = 0, cy = 0, ok = 0;
@@ -87,7 +87,7 @@ function footprintMostlyInside(fp: Point2D[], poly: Point2D[]): boolean {
   }
   cx /= fp.length; cy /= fp.length;
   if (!pointInPoly({ x: cx, y: cy }, poly)) return false;
-  return ok >= Math.ceil(fp.length * 0.5);
+  return ok >= Math.ceil(fp.length * 0.75);
 }
 
 function aabbOf(fp: Point2D[]): { minX: number; maxX: number; minY: number; maxY: number } {
@@ -136,60 +136,123 @@ interface ParcelCell {
   cx: number; cy: number; w: number; d: number; parcelArea: number; rot?: number;
 }
 
-/**
- * Closed perimeter ring inside `box` (already setback from zone).
- *
- *   ┌──────────────┐  North full-width
- *   │              │
- *   │  courtyard   │  West / East fill the vertical gap only
- *   │              │
- *   └──────────────┘  South full-width
- */
-function parcelizePerimeter(
-  box: { minX: number; maxX: number; minY: number; maxY: number },
-  parcelDepthM: number, coverage: number, minW: number, minD: number
-): ParcelCell[] {
-  const W = box.maxX - box.minX;
-  const D = box.maxY - box.minY;
-  const area = Math.max(1, W * D);
-  if (W < 8 || D < 8) return [];
+function signedArea(poly: Point2D[]): number {
+  let a = 0;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    a += poly[j].x * poly[i].y - poly[i].x * poly[j].y;
+  }
+  return a * 0.5;
+}
 
-  const maxDepth = Math.min(W, D) * 0.35;
-  let depth = Math.min(Math.max(parcelDepthM, minD), maxDepth);
-  depth = Math.min(depth, Math.min(W, D) * 0.4 - 1);
+function polyCentroid(poly: Point2D[]): Point2D {
+  let cx = 0, cy = 0;
+  for (const p of poly) { cx += p.x; cy += p.y; }
+  return { x: cx / poly.length, y: cy / poly.length };
+}
+
+/**
+ * Perimeter ring along actual polygon edges.
+ * One bar per edge, shifted inward; shortened at corners so nothing pokes outside.
+ */
+function parcelizePerimeterAlongEdges(
+  poly: Point2D[],
+  setbackM: number,
+  parcelDepthM: number,
+  coverage: number,
+  minW: number,
+  minD: number
+): ParcelCell[] {
+  if (poly.length < 3) return [];
+  const area = Math.abs(signedArea(poly));
+  if (area < 20) return [];
+  const ccw = signedArea(poly) > 0;
+  const centroid = polyCentroid(poly);
+
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of poly) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  const charSize = Math.min(maxX - minX, maxY - minY);
+  if (charSize < 10) return [];
+
+  let depth = Math.min(parcelDepthM, charSize * 0.28, Math.max(minD, 10));
   depth = Math.max(4, depth);
 
-  if (W < depth * 2 + 6 || D < depth * 2 + 6) {
-    return [{
-      cx: (box.minX + box.maxX) / 2,
-      cy: (box.minY + box.maxY) / 2,
-      w: W * 0.92, d: D * 0.92, parcelArea: area,
-    }];
+  let perimeter = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    perimeter += Math.hypot(b.x - a.x, b.y - a.y);
   }
+  const ringApprox = perimeter * depth;
+  const covScale = Math.min(1, Math.max(0.55, (coverage * area) / Math.max(1, ringApprox)));
+  depth = Math.max(4, depth * Math.sqrt(covScale));
 
-  const pad = 0.15;
+  const insetDist = setbackM + depth / 2 + 0.3;
+  const cornerCut = depth * 0.65 + setbackM * 0.25;
+  const cells: ParcelCell[] = [];
+  const n = poly.length;
+
+  for (let i = 0; i < n; i++) {
+    const a = poly[i], b = poly[(i + 1) % n];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const edgeLen = Math.hypot(dx, dy);
+    if (edgeLen < minW * 0.6) continue;
+    const ux = dx / edgeLen, uy = dy / edgeLen;
+    let nx = ccw ? -uy : uy;
+    let ny = ccw ? ux : -ux;
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    const toC = { x: centroid.x - mid.x, y: centroid.y - mid.y };
+    if (nx * toC.x + ny * toC.y < 0) { nx = -nx; ny = -ny; }
+    const usable = edgeLen - 2 * cornerCut;
+    if (usable < minW * 0.5) continue;
+    const cx = mid.x + nx * insetDist;
+    const cy = mid.y + ny * insetDist;
+    const rot = Math.atan2(uy, ux);
+    cells.push({ cx, cy, w: usable, d: depth, parcelArea: area / n, rot });
+  }
+  return cells;
+}
+
+function parcelizePerimeterRect(
+  box: { minX: number; maxX: number; minY: number; maxY: number },
+  parcelDepthM: number, coverage: number, minD: number
+): ParcelCell[] {
+  const W = box.maxX - box.minX, D = box.maxY - box.minY;
+  const area = Math.max(1, W * D);
+  if (W < 8 || D < 8) return [];
+  let depth = Math.min(Math.max(parcelDepthM, minD), Math.min(W, D) * 0.32);
+  depth = Math.max(4, Math.min(depth, Math.min(W, D) * 0.38 - 1));
+  if (W < depth * 2 + 6 || D < depth * 2 + 6) {
+    return [{ cx: (box.minX + box.maxX) / 2, cy: (box.minY + box.maxY) / 2, w: W * 0.9, d: D * 0.9, parcelArea: area }];
+  }
+  const pad = 0.2;
   const x0 = box.minX + pad, x1 = box.maxX - pad;
   const y0 = box.minY + pad, y1 = box.maxY - pad;
   const iW = x1 - x0, iD = y1 - y0;
-
   const ringArea = 2 * (iW + iD) * depth - 4 * depth * depth;
   const scale = Math.min(1, Math.max(0.5, (coverage * area) / Math.max(1, ringArea)));
-  let dUse = depth * Math.sqrt(scale);
-  dUse = Math.max(4, Math.min(dUse, Math.min(iW, iD) * 0.4 - 0.5));
-
+  let dUse = Math.max(4, Math.min(depth * Math.sqrt(scale), Math.min(iW, iD) * 0.38));
   const cells: ParcelCell[] = [];
   const share = area / 4;
-
   cells.push({ cx: (x0 + x1) / 2, cy: y0 + dUse / 2, w: iW, d: dUse, parcelArea: share });
   cells.push({ cx: (x0 + x1) / 2, cy: y1 - dUse / 2, w: iW, d: dUse, parcelArea: share });
-
   const gap = iD - 2 * dUse;
   if (gap >= 3) {
     cells.push({ cx: x0 + dUse / 2, cy: (y0 + y1) / 2, w: dUse, d: gap, parcelArea: share });
     cells.push({ cx: x1 - dUse / 2, cy: (y0 + y1) / 2, w: dUse, d: gap, parcelArea: share });
   }
-
   return cells;
+}
+
+function isNearlyRect(poly: Point2D[]): boolean {
+  if (poly.length !== 4) return false;
+  for (let i = 0; i < 4; i++) {
+    const a = poly[i], b = poly[(i + 1) % 4];
+    const dx = Math.abs(b.x - a.x), dy = Math.abs(b.y - a.y);
+    if (dx > 0.5 && dy > 0.5) return false;
+  }
+  return true;
 }
 
 function parcelizeTower(
@@ -257,7 +320,6 @@ export function generateBuildingsForZone(
   zone: ZoneRect, _opts: GenerateOptions = {}
 ): GeneratedBuilding[] {
   if (zone.type === 'boundary' || zone.type === 'park') return [];
-
   const params = resolveZoneParams(zone);
   if (params.buildForm === 'open' || params.coverage <= 0 || params.far <= 0) return [];
 
@@ -270,34 +332,61 @@ export function generateBuildingsForZone(
 
   const setback = Math.max(0, params.setbackM);
   const inset = insetBBox(minX, maxX, minY, maxY, setback);
-  if (!inset) return [];
-
   const rng = mulberry32(params.seed);
   const min = MIN_FOOTPRINT[zone.type] ?? MIN_FOOTPRINT.residential;
 
   let cells: ParcelCell[] = [];
   switch (params.buildForm) {
-    case 'tower': cells = parcelizeTower(inset, params.coverage, min.w, rng); break;
-    case 'random': cells = parcelizeRandom(inset, poly, params.coverage, min.w, min.d, rng); break;
-    case 'corridor': cells = parcelizeCorridor(inset, params.parcelDepthM, params.coverage, min.w); break;
+    case 'tower':
+      if (!inset) return [];
+      cells = parcelizeTower(inset, params.coverage, min.w, rng);
+      break;
+    case 'random':
+      if (!inset) return [];
+      cells = parcelizeRandom(inset, poly, params.coverage, min.w, min.d, rng);
+      break;
+    case 'corridor':
+      if (!inset) return [];
+      cells = parcelizeCorridor(inset, params.parcelDepthM, params.coverage, min.w);
+      break;
     case 'block':
-    default: cells = parcelizePerimeter(inset, params.parcelDepthM, params.coverage, min.w, min.d); break;
+    default: {
+      // Follow actual polygon edges for freehand / irregular zones
+      if (isNearlyRect(poly) && inset) {
+        cells = parcelizePerimeterRect(inset, params.parcelDepthM, params.coverage, min.d);
+      } else {
+        cells = parcelizePerimeterAlongEdges(poly, setback, params.parcelDepthM, params.coverage, min.w, min.d);
+      }
+      if (!cells.length && inset) {
+        cells = parcelizePerimeterRect(inset, params.parcelDepthM, params.coverage, min.d);
+      }
+      break;
+    }
   }
 
   const out: GeneratedBuilding[] = [];
   for (let i = 0; i < cells.length; i++) {
     const cell = cells[i];
     const rot = cell.rot ?? 0;
-    const fp = rectFootprint(cell.cx, cell.cy, cell.w, cell.d, rot);
-    const fpA = footprintArea(fp);
+    let w = cell.w, d = cell.d;
+    let fp = rectFootprint(cell.cx, cell.cy, w, d, rot);
+    let fpA = footprintArea(fp);
     if (fpA < 4) continue;
 
-    // Perimeter is built on the inset box → already inside the zone.
-    // Other forms: soft containment filter only.
-    if (params.buildForm !== 'block' && !footprintMostlyInside(fp, poly)) continue;
+    // Enforce inside-zone for every form (shrink up to 2 times)
+    if (!footprintMostlyInside(fp, poly)) {
+      w *= 0.9; d *= 0.9;
+      fp = rectFootprint(cell.cx, cell.cy, w, d, rot);
+      fpA = footprintArea(fp);
+      if (!footprintMostlyInside(fp, poly)) {
+        w *= 0.9; d *= 0.9;
+        fp = rectFootprint(cell.cx, cell.cy, w, d, rot);
+        fpA = footprintArea(fp);
+        if (!footprintMostlyInside(fp, poly)) continue;
+      }
+    }
 
     let { heightM, floors } = heightFromFar(params.far, cell.parcelArea, fpA, params.maxFloors, FLOOR_HEIGHT_M);
-
     if (params.buildForm === 'random') {
       const factor = 0.55 + rng() * 0.9;
       floors = Math.max(1, Math.min(params.maxFloors, Math.round(floors * factor)));
@@ -307,18 +396,11 @@ export function generateBuildingsForZone(
       floors = Math.max(floors, Math.min(params.maxFloors, Math.max(4, Math.round(params.maxFloors * 0.85))));
       heightM = floors * FLOOR_HEIGHT_M;
     }
-
     out.push({
-      id: uid(zone.id, i, params.seed),
-      zoneId: zone.id,
-      footprint: fp,
-      heightM,
-      floors,
-      type: zone.type,
-      buildForm: params.buildForm,
+      id: uid(zone.id, i, params.seed), zoneId: zone.id, footprint: fp,
+      heightM, floors, type: zone.type, buildForm: params.buildForm,
     });
   }
-
   return out;
 }
 
