@@ -17,6 +17,7 @@ const GREEN: Record<ZoneCourtyard['kind'], string> = {
 
 function groundGeometry(poly: { x: number; y: number }[]): THREE.BufferGeometry {
   if (poly.length < 3) return new THREE.BufferGeometry();
+  // Fan triangulation from first vertex
   const positions: number[] = [];
   const indices: number[] = [];
   for (const p of poly) {
