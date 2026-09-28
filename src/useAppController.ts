@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { type ToolId } from './ui/Toolbar';
 import { type SelectedOsm } from './tools/SelectionBridge';
-import type { ZoneRect, ZoneType, GeneratedBuilding } from './domain/zones';
+import type { ZoneRect, ZoneType, GeneratedBuilding, ZoneDriveway } from './domain/zones';
 import type { RoadCenterline, RoadProfileId, RoadOptions, DrawMode, ZoneDrawMode } from './domain/roads';
 import { ROAD_PROFILE_ORDER } from './domain/roads';
 import {
@@ -12,7 +12,7 @@ import {
   GenerateZoneCommand,
   DeleteBuildingCommand,
 } from './state/commandStack';
-import { generateBuildingsForZone, actualFar } from './geometry/zoneGenerate';
+import { generateZoneContent, generateBuildingsForZone, actualFar } from './geometry/zoneGenerate';
 import { type ModelQuality } from './ui/ScenePanel';
 import { type InspectorTarget } from './ui/InspectorPanel';
 import { computeSceneStats } from './domain/stats';
@@ -40,6 +40,7 @@ export function useAppController() {
   const [tool, setTool] = useState<ToolId>('select');
   const [zones, setZones] = useState<ZoneRect[]>([]);
   const [generatedBuildings, setGeneratedBuildings] = useState<GeneratedBuilding[]>([]);
+  const [zoneDriveways, setZoneDriveways] = useState<ZoneDriveway[]>([]);
   const [zoneType, setZoneType] = useState<ZoneType>('residential');
   const [userRoads, setUserRoads] = useState<RoadCenterline[]>([]);
   const [roadProfile, setRoadProfile] = useState<RoadProfileId>('residential');
@@ -141,6 +142,7 @@ export function useAppController() {
         setZones([]);
         setUserRoads([]);
         setGeneratedBuildings([]);
+        setZoneDriveways([]);
         cmdStack.current.clear();
         setFacadeNightFactor(hour);
       } catch (err) {
@@ -169,6 +171,8 @@ export function useAppController() {
   zonesRef.current = zones;
   const buildingsRef = useRef(generatedBuildings);
   buildingsRef.current = generatedBuildings;
+  const drivewaysRef = useRef(zoneDriveways);
+  drivewaysRef.current = zoneDriveways;
 
   const performDelete = useCallback((sel: SelectedOsm) => {
     if (sel.kind === 'user-road') {
@@ -200,6 +204,7 @@ export function useAppController() {
       if (zoneId) {
         setZones((prev) => prev.filter((z) => z.id !== zoneId));
         setGeneratedBuildings((prev) => prev.filter((b) => b.zoneId !== zoneId));
+        setZoneDriveways((prev) => prev.filter((d) => d.zoneId !== zoneId));
       }
       setSelected(null);
       return;
@@ -227,14 +232,23 @@ export function useAppController() {
           const zid = selected.zoneId ?? (selected.object.userData?.zoneId as string | undefined);
           const zone = zonesRef.current.find((z) => z.id === zid);
           if (zone && zone.type !== 'boundary' && zone.type !== 'park') {
-            const next = generateBuildingsForZone(zone);
+            const content = generateZoneContent(zone);
             cmdStack.current.push(
               new GenerateZoneCommand(
                 zone.id,
-                next,
+                content.buildings,
                 () => buildingsRef.current,
                 setGeneratedBuildings,
-                next.length ? 'Generate buildings' : 'Clear buildings'
+                content.buildings.length ? 'Generate zone content' : 'Clear buildings'
+              )
+            );
+            cmdStack.current.push(
+              new GenerateZoneCommand(
+                zone.id,
+                content.driveways,
+                () => drivewaysRef.current,
+                setZoneDriveways,
+                'Generate driveways'
               )
             );
           }
@@ -375,6 +389,8 @@ export function useAppController() {
     setZones,
     generatedBuildings,
     setGeneratedBuildings,
+    zoneDriveways,
+    setZoneDriveways,
     zoneType,
     setZoneType,
     userRoads,
@@ -425,6 +441,7 @@ export function useAppController() {
     openImport,
     zonesRef,
     buildingsRef,
+    drivewaysRef,
     userRoadsRef,
   };
 }
