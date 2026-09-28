@@ -40,7 +40,7 @@ export default function App() {
     zoneDriveways, setZoneDriveways, zoneCourtyards, setZoneCourtyards,
     zoneType, setZoneType,
     userRoads, setUserRoads, roadProfile, setRoadProfile, roadOptions, setRoadOptions,
-    roadDrawMode, setRoadDrawMode, zoneDrawMode, setZoneDrawMode, roadDraftPts,
+    roadDrawMode, setRoadDrawMode, zoneDrawMode, setZoneDrawMode, roadDraftPts, setRoadDraftPts,
     drawingActive, setDrawingActive, selected, setSelected, undoTick, cmdStack,
     hour, setHour, sceneOpen, setSceneOpen, quality, setQuality, fogAmount, setFogAmount,
     showGrid, setShowGrid, showNorth, setShowNorth, units, setUnits, hover,
@@ -82,7 +82,7 @@ export default function App() {
           drawMode={roadDrawMode}
           existingRoads={userRoads}
           onCommit={(r) => cmdStack.current.push(new AddRoadCommand(r, setUserRoads))}
-          onDraftChange={(pts) => c.setRoadDraftPts(pts ? pts.length : null)}
+          onDraftChange={(pts) => setRoadDraftPts(pts ? pts.length : null)}
           onDrawingActive={setDrawingActive}
         />
         <OrbitControls
