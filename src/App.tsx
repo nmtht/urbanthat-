@@ -10,9 +10,7 @@ import { RoadBridge } from './tools/RoadBridge';
 import { UserRoadsLayer } from './render/UserRoadsLayer';
 import { UserBuildingsLayer } from './render/UserBuildingsLayer';
 import { ZoneDrivewaysLayer } from './render/ZoneDrivewaysLayer';
-import type { ZoneType } from './domain/zones';
-import type { DrawMode, ZoneDrawMode } from './domain/roads';
-import { ROAD_PROFILE_ORDER, ROAD_PROFILES, getRoadProfile } from './domain/roads';
+import { ZoneCourtyardsLayer } from './render/ZoneCourtyardsLayer';
 import { StatusChip } from './ui/StatusChip';
 import { EmptyState } from './ui/EmptyState';
 import { ScenePanel } from './ui/ScenePanel';
@@ -30,21 +28,26 @@ import {
   AddRoadCommand,
 } from './state/commandStack';
 import { generateZoneContent } from './geometry/zoneGenerate';
+import type { ZoneType } from './domain/zones';
+import type { DrawMode, ZoneDrawMode } from './domain/roads';
+import { ROAD_PROFILE_ORDER, ROAD_PROFILES, getRoadProfile } from './domain/roads';
 
 export default function App() {
   const c = useAppController();
   const {
     dialogOpen, setDialogOpen, startedEmpty, setStartedEmpty, loading, error, osm, tool, setTool,
-    zones, setZones, generatedBuildings, setGeneratedBuildings, zoneDriveways, setZoneDriveways,
-    zoneType, setZoneType, userRoads, setUserRoads, roadProfile, setRoadProfile, roadOptions, setRoadOptions,
-    roadDrawMode, setRoadDrawMode, zoneDrawMode, setZoneDrawMode, roadDraftPts, drawingActive,
-    selected, setSelected, undoTick, cmdStack, hour, setHour, sceneOpen, setSceneOpen,
-    quality, setQuality, fogAmount, setFogAmount, showGrid, setShowGrid, showNorth, setShowNorth,
-    units, setUnits, hover, yawDeg, handleHover, handleImport, performDelete,
+    zones, setZones, generatedBuildings, setGeneratedBuildings,
+    zoneDriveways, setZoneDriveways, zoneCourtyards, setZoneCourtyards,
+    zoneType, setZoneType,
+    userRoads, setUserRoads, roadProfile, setRoadProfile, roadOptions, setRoadOptions,
+    roadDrawMode, setRoadDrawMode, zoneDrawMode, setZoneDrawMode, roadDraftPts,
+    drawingActive, setDrawingActive, selected, setSelected, undoTick, cmdStack,
+    hour, setHour, sceneOpen, setSceneOpen, quality, setQuality, fogAmount, setFogAmount,
+    showGrid, setShowGrid, showNorth, setShowNorth, units, setUnits, hover,
+    yawDeg, onYaw, handleHover, handleImport, handleRefresh, performDelete,
     fitKey, fitTarget, inspectorTarget, zoneGenStats, sceneStats, openImport,
-    zonesRef, buildingsRef, drivewaysRef,
+    zonesRef, buildingsRef, drivewaysRef, courtyardsRef,
   } = c;
-
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
       <Canvas
@@ -59,11 +62,10 @@ export default function App() {
       >
         <Atmosphere hour={hour} fogAmount={fogAmount} />
         <group>{osm && <primitive object={osm.group} />}</group>
-        {showGrid && (
-          <gridHelper args={[2000, 40, '#3a3a3c', '#2c2c2e']} position={[0, 0.02, 0]} />
-        )}
+        {showGrid && <gridHelper args={[2000, 40, '#3a3a3c', '#2c2c2e']} position={[0, 0.02, 0]} />}
         <ZoneMeshes zones={zones} />
         <UserRoadsLayer roads={userRoads} quality={quality} hour={hour} />
+        <ZoneCourtyardsLayer courtyards={zoneCourtyards} />
         <ZoneDrivewaysLayer driveways={zoneDriveways} />
         <UserBuildingsLayer buildings={generatedBuildings} quality={quality} />
         <ZoneBridge
@@ -71,7 +73,7 @@ export default function App() {
           zoneType={zoneType}
           drawMode={zoneDrawMode}
           onCommit={(z) => cmdStack.current.push(new AddZoneCommand(z, setZones))}
-          onDrawingActive={c.setDrawingActive}
+          onDrawingActive={setDrawingActive}
         />
         <RoadBridge
           enabled={tool === 'road'}
@@ -81,7 +83,7 @@ export default function App() {
           existingRoads={userRoads}
           onCommit={(r) => cmdStack.current.push(new AddRoadCommand(r, setUserRoads))}
           onDraftChange={(pts) => c.setRoadDraftPts(pts ? pts.length : null)}
-          onDrawingActive={c.setDrawingActive}
+          onDrawingActive={setDrawingActive}
         />
         <OrbitControls
           makeDefault
@@ -93,7 +95,7 @@ export default function App() {
           enabled={!drawingActive}
         />
         <CameraFit target={fitTarget} fitKey={fitKey} />
-        <CameraYawReporter onYaw={c.onYaw} />
+        <CameraYawReporter onYaw={onYaw} />
         <PickBridge enabled={tool === 'select' || tool === 'delete'} onHover={handleHover} />
         <SelectionBridge
           tool={tool}
@@ -332,6 +334,15 @@ export default function App() {
               'Generate driveways'
             )
           );
+          cmdStack.current.push(
+            new GenerateZoneCommand(
+              zoneId,
+              content.courtyards,
+              () => courtyardsRef.current,
+              setZoneCourtyards,
+              'Generate courtyards'
+            )
+          );
         }}
         onClearZoneBuildings={(zoneId) => {
           cmdStack.current.push(
@@ -339,6 +350,9 @@ export default function App() {
           );
           cmdStack.current.push(
             new ClearZoneBuildingsCommand(zoneId, () => drivewaysRef.current, setZoneDriveways)
+          );
+          cmdStack.current.push(
+            new ClearZoneBuildingsCommand(zoneId, () => courtyardsRef.current, setZoneCourtyards)
           );
         }}
         onUpdateBuilding={(id, patch) => {
