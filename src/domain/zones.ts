@@ -2,9 +2,6 @@ import type { Point2D } from './SceneOrigin';
 
 export type ZoneType = 'residential' | 'commercial' | 'industrial' | 'park' | 'boundary';
 
-/**
- * Building form — foundation for the zoning generation sprint.
- */
 export type ZoneBuildForm =
   | 'block'
   | 'tower'
@@ -25,15 +22,11 @@ export interface ZoneRect {
   far?: number;
   maxFloors?: number;
   coverage?: number;
-  /** Setback from zone boundary / roads (m). Default ~4. */
   setbackM?: number;
-  /** Parcel depth from street front for block/corridor (m). */
   parcelDepthM?: number;
-  /** Deterministic RNG seed for parcelization. */
   seed?: number;
 }
 
-/** Generated massing volume produced by zone generation. */
 export interface GeneratedBuilding {
   id: string;
   zoneId: string;
@@ -44,19 +37,15 @@ export interface GeneratedBuilding {
   buildForm: ZoneBuildForm;
 }
 
-/** Internal zone driveway / fire lane — road-like, can connect to user roads via ports. */
 export interface ZoneDriveway {
   id: string;
   zoneId: string;
-  /** Centerline in scene meters. */
   centerline: Point2D[];
   halfWidthM: number;
   kind: 'fire' | 'access' | 'service';
-  /** Endpoints on (or near) zone boundary for linking to external roads. */
   ports: { point: Point2D; tangent: Point2D }[];
 }
 
-/** Green courtyard / plaza inside a zone. */
 export interface ZoneCourtyard {
   id: string;
   zoneId: string;
@@ -65,11 +54,7 @@ export interface ZoneCourtyard {
   trees: { x: number; y: number }[];
 }
 
-/**
- * Full result of zone content generation.
- * Driveways and courtyards are empty until those stages are implemented;
- * contract is stable so UI/commands can adopt it now.
- */
+/** Full result of zone content generation (buildings + driveways + courtyards). */
 export interface ZoneGeneratedContent {
   buildings: GeneratedBuilding[];
   driveways: ZoneDriveway[];
@@ -100,7 +85,6 @@ export const ZONE_BUILD_FORMS: { id: ZoneBuildForm; label: string }[] = [
   { id: 'open', label: 'Open space' },
 ];
 
-/** Default zoning metrics by type (Inspector can override). */
 export const ZONE_DEFAULTS: Record<
   ZoneType,
   { far: number; coverage: number; maxFloors: number; form: ZoneBuildForm; setbackM: number }
@@ -112,7 +96,6 @@ export const ZONE_DEFAULTS: Record<
   boundary: { far: 0, coverage: 0, maxFloors: 0, form: 'open', setbackM: 0 },
 };
 
-/** Per-build-form defaults (applied when switching form in Inspector if field unset). */
 export const FORM_DEFAULTS: Record<
   ZoneBuildForm,
   { far?: number; coverage?: number; maxFloors?: number; parcelDepthM?: number }
