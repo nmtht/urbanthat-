@@ -9,6 +9,7 @@ import { ZoneBridge, ZoneMeshes } from './tools/ZoneBridge';
 import { RoadBridge } from './tools/RoadBridge';
 import { UserRoadsLayer } from './render/UserRoadsLayer';
 import { UserBuildingsLayer } from './render/UserBuildingsLayer';
+import { ZoneDrivewaysLayer } from './render/ZoneDrivewaysLayer';
 import type { ZoneType } from './domain/zones';
 import type { DrawMode, ZoneDrawMode } from './domain/roads';
 import { ROAD_PROFILE_ORDER, ROAD_PROFILES, getRoadProfile } from './domain/roads';
@@ -28,69 +29,20 @@ import {
   AddZoneCommand,
   AddRoadCommand,
 } from './state/commandStack';
-import { generateBuildingsForZone } from './geometry/zoneGenerate';
+import { generateZoneContent } from './geometry/zoneGenerate';
 
 export default function App() {
   const c = useAppController();
   const {
-    dialogOpen,
-    setDialogOpen,
-    startedEmpty,
-    setStartedEmpty,
-    loading,
-    error,
-    osm,
-    tool,
-    setTool,
-    zones,
-    setZones,
-    generatedBuildings,
-    setGeneratedBuildings,
-    zoneType,
-    setZoneType,
-    userRoads,
-    setUserRoads,
-    roadProfile,
-    setRoadProfile,
-    roadOptions,
-    setRoadOptions,
-    roadDrawMode,
-    setRoadDrawMode,
-    zoneDrawMode,
-    setZoneDrawMode,
-    roadDraftPts,
-    drawingActive,
-    selected,
-    setSelected,
-    undoTick,
-    cmdStack,
-    hour,
-    setHour,
-    sceneOpen,
-    setSceneOpen,
-    quality,
-    setQuality,
-    fogAmount,
-    setFogAmount,
-    showGrid,
-    setShowGrid,
-    showNorth,
-    setShowNorth,
-    units,
-    setUnits,
-    hover,
-    yawDeg,
-    handleHover,
-    handleImport,
-    performDelete,
-    fitKey,
-    fitTarget,
-    inspectorTarget,
-    zoneGenStats,
-    sceneStats,
-    openImport,
-    zonesRef,
-    buildingsRef,
+    dialogOpen, setDialogOpen, startedEmpty, setStartedEmpty, loading, error, osm, tool, setTool,
+    zones, setZones, generatedBuildings, setGeneratedBuildings, zoneDriveways, setZoneDriveways,
+    zoneType, setZoneType, userRoads, setUserRoads, roadProfile, setRoadProfile, roadOptions, setRoadOptions,
+    roadDrawMode, setRoadDrawMode, zoneDrawMode, setZoneDrawMode, roadDraftPts, drawingActive,
+    selected, setSelected, undoTick, cmdStack, hour, setHour, sceneOpen, setSceneOpen,
+    quality, setQuality, fogAmount, setFogAmount, showGrid, setShowGrid, showNorth, setShowNorth,
+    units, setUnits, hover, yawDeg, handleHover, handleImport, performDelete,
+    fitKey, fitTarget, inspectorTarget, zoneGenStats, sceneStats, openImport,
+    zonesRef, buildingsRef, drivewaysRef,
   } = c;
 
   return (
@@ -112,6 +64,7 @@ export default function App() {
         )}
         <ZoneMeshes zones={zones} />
         <UserRoadsLayer roads={userRoads} quality={quality} hour={hour} />
+        <ZoneDrivewaysLayer driveways={zoneDriveways} />
         <UserBuildingsLayer buildings={generatedBuildings} quality={quality} />
         <ZoneBridge
           enabled={tool === 'zone'}
@@ -209,28 +162,20 @@ export default function App() {
               )
             )}
             <span style={hud.sep} />
-            {(
-              [
-                ['rect', 'Rect'],
-                ['polygon', 'Poly'],
-                ['freehand', 'Free'],
-              ] as [ZoneDrawMode, string][]
-            ).map(([m, label]) => (
-              <button
-                key={m}
-                type="button"
-                style={{ ...hud.zoneBtn, ...(zoneDrawMode === m ? hud.zoneBtnOn : null) }}
-                onClick={() => setZoneDrawMode(m)}
-              >
-                {label}
-              </button>
-            ))}
+            {([['rect', 'Rect'], ['polygon', 'Poly'], ['freehand', 'Free']] as [ZoneDrawMode, string][]).map(
+              ([m, label]) => (
+                <button
+                  key={m}
+                  type="button"
+                  style={{ ...hud.zoneBtn, ...(zoneDrawMode === m ? hud.zoneBtnOn : null) }}
+                  onClick={() => setZoneDrawMode(m)}
+                >
+                  {label}
+                </button>
+              )
+            )}
             <span style={hud.zoneHint}>
-              {zoneDrawMode === 'rect'
-                ? 'drag rectangle'
-                : zoneDrawMode === 'polygon'
-                  ? 'click · Enter'
-                  : 'hold-drag outline'}
+              {zoneDrawMode === 'rect' ? 'drag rectangle' : zoneDrawMode === 'polygon' ? 'click · Enter' : 'hold-drag outline'}
             </span>
           </div>
         </div>
@@ -254,22 +199,18 @@ export default function App() {
               </button>
             ))}
             <span style={hud.sep} />
-            {(
-              [
-                ['straight', 'Straight'],
-                ['curve', 'Curve'],
-                ['freehand', 'Free'],
-              ] as [DrawMode, string][]
-            ).map(([m, label]) => (
-              <button
-                key={m}
-                type="button"
-                style={{ ...hud.zoneBtn, ...(roadDrawMode === m ? hud.zoneBtnOn : null) }}
-                onClick={() => setRoadDrawMode(m)}
-              >
-                {label}
-              </button>
-            ))}
+            {([['straight', 'Straight'], ['curve', 'Curve'], ['freehand', 'Free']] as [DrawMode, string][]).map(
+              ([m, label]) => (
+                <button
+                  key={m}
+                  type="button"
+                  style={{ ...hud.zoneBtn, ...(roadDrawMode === m ? hud.zoneBtnOn : null) }}
+                  onClick={() => setRoadDrawMode(m)}
+                >
+                  {label}
+                </button>
+              )
+            )}
             <span style={hud.zoneHint}>
               {roadDraftPts != null
                 ? `${roadDraftPts} pts · Enter`
@@ -286,14 +227,10 @@ export default function App() {
               <select
                 style={hud.select}
                 value={roadOptions.lanes ?? getRoadProfile(roadProfile).lanes}
-                onChange={(e) =>
-                  setRoadOptions((o) => ({ ...o, lanes: parseInt(e.target.value, 10) }))
-                }
+                onChange={(e) => setRoadOptions((o) => ({ ...o, lanes: parseInt(e.target.value, 10) }))}
               >
                 {[1, 2, 3, 4, 5, 6].map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
+                  <option key={n} value={n}>{n}</option>
                 ))}
               </select>
             </label>
@@ -301,9 +238,7 @@ export default function App() {
               <input
                 type="checkbox"
                 checked={(roadOptions.parkingM ?? 0) > 0}
-                onChange={(e) =>
-                  setRoadOptions((o) => ({ ...o, parkingM: e.target.checked ? 2.2 : 0 }))
-                }
+                onChange={(e) => setRoadOptions((o) => ({ ...o, parkingM: e.target.checked ? 2.2 : 0 }))}
               />
               Parking
             </label>
@@ -311,9 +246,7 @@ export default function App() {
               <input
                 type="checkbox"
                 checked={(roadOptions.greenBufferM ?? 0) > 0}
-                onChange={(e) =>
-                  setRoadOptions((o) => ({ ...o, greenBufferM: e.target.checked ? 1.5 : 0 }))
-                }
+                onChange={(e) => setRoadOptions((o) => ({ ...o, greenBufferM: e.target.checked ? 1.5 : 0 }))}
               />
               Green
             </label>
@@ -324,9 +257,7 @@ export default function App() {
                 onChange={(e) =>
                   setRoadOptions((o) => ({
                     ...o,
-                    sidewalkM: e.target.checked
-                      ? getRoadProfile(roadProfile).sidewalkM || 1.5
-                      : 0,
+                    sidewalkM: e.target.checked ? getRoadProfile(roadProfile).sidewalkM || 1.5 : 0,
                   }))
                 }
               />
@@ -370,9 +301,7 @@ export default function App() {
         onClose={() => setSelected(null)}
         onUpdateRoad={(id, patch) => {
           setUserRoads((prev) =>
-            prev.map((r) =>
-              r.id === id ? { ...r, ...patch, options: patch.options ?? r.options } : r
-            )
+            prev.map((r) => (r.id === id ? { ...r, ...patch, options: patch.options ?? r.options } : r))
           );
         }}
         onUpdateZone={(id, patch) => {
@@ -384,20 +313,32 @@ export default function App() {
         onGenerateZone={(zoneId) => {
           const zone = zonesRef.current.find((z) => z.id === zoneId);
           if (!zone) return;
-          const next = generateBuildingsForZone(zone);
+          const content = generateZoneContent(zone);
           cmdStack.current.push(
             new GenerateZoneCommand(
               zoneId,
-              next,
+              content.buildings,
               () => buildingsRef.current,
               setGeneratedBuildings,
-              next.length ? 'Generate buildings' : 'Clear buildings'
+              content.buildings.length ? 'Generate zone content' : 'Clear buildings'
+            )
+          );
+          cmdStack.current.push(
+            new GenerateZoneCommand(
+              zoneId,
+              content.driveways,
+              () => drivewaysRef.current,
+              setZoneDriveways,
+              'Generate driveways'
             )
           );
         }}
         onClearZoneBuildings={(zoneId) => {
           cmdStack.current.push(
             new ClearZoneBuildingsCommand(zoneId, () => buildingsRef.current, setGeneratedBuildings)
+          );
+          cmdStack.current.push(
+            new ClearZoneBuildingsCommand(zoneId, () => drivewaysRef.current, setZoneDriveways)
           );
         }}
         onUpdateBuilding={(id, patch) => {
@@ -441,107 +382,48 @@ export default function App() {
 
 const hud: Record<string, CSSProperties> = {
   top: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: '12px 16px',
-    pointerEvents: 'none',
-    zIndex: 20,
+    position: 'absolute', top: 0, left: 0, right: 0,
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    padding: '12px 16px', pointerEvents: 'none', zIndex: 20,
   },
   topRight: { display: 'flex', gap: 8, pointerEvents: 'auto' },
   btn: {
-    pointerEvents: 'auto',
-    border: 'none',
-    borderRadius: 10,
-    padding: '8px 12px',
-    background: 'rgba(44,44,46,0.75)',
-    color: '#f5f5f7',
-    fontSize: 13,
-    fontWeight: 500,
-    cursor: 'pointer',
-    backdropFilter: 'blur(12px)',
+    pointerEvents: 'auto', border: 'none', borderRadius: 10, padding: '8px 12px',
+    background: 'rgba(44,44,46,0.75)', color: '#f5f5f7', fontSize: 13, fontWeight: 500,
+    cursor: 'pointer', backdropFilter: 'blur(12px)',
   },
   toolPanel: {
-    position: 'absolute',
-    bottom: 88,
-    left: '50%',
-    transform: 'translateX(-50%)',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 6,
-    zIndex: 22,
-    alignItems: 'center',
+    position: 'absolute', bottom: 88, left: '50%', transform: 'translateX(-50%)',
+    display: 'flex', flexDirection: 'column', gap: 6, zIndex: 22, alignItems: 'center',
     pointerEvents: 'auto',
   },
   zoneBar: {
-    position: 'relative',
-    display: 'flex',
-    gap: 6,
-    alignItems: 'center',
-    padding: '6px 10px',
-    borderRadius: 12,
-    background: 'rgba(28,28,30,0.82)',
+    position: 'relative', display: 'flex', gap: 6, alignItems: 'center',
+    padding: '6px 10px', borderRadius: 12, background: 'rgba(28,28,30,0.82)',
     backdropFilter: 'blur(16px)',
   },
-  sep: {
-    width: 1,
-    height: 18,
-    background: 'rgba(255,255,255,0.15)',
-    margin: '0 4px',
-  },
+  sep: { width: 1, height: 18, background: 'rgba(255,255,255,0.15)', margin: '0 4px' },
   optLabel: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 4,
-    color: 'rgba(255,255,255,0.7)',
-    fontSize: 11,
-    fontFamily: '-apple-system, system-ui, sans-serif',
-    cursor: 'pointer',
+    display: 'flex', alignItems: 'center', gap: 4, color: 'rgba(255,255,255,0.7)',
+    fontSize: 11, fontFamily: '-apple-system, system-ui, sans-serif', cursor: 'pointer',
   },
   select: {
-    background: 'rgba(255,255,255,0.1)',
-    border: 'none',
-    borderRadius: 4,
-    color: '#fff',
-    fontSize: 11,
-    padding: '2px 4px',
+    background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: 4,
+    color: '#fff', fontSize: 11, padding: '2px 4px',
   },
   zoneBtn: {
-    border: 'none',
-    borderRadius: 8,
-    padding: '6px 10px',
-    background: 'transparent',
-    color: 'rgba(255,255,255,0.7)',
-    fontSize: 12,
-    fontFamily: '-apple-system, system-ui, sans-serif',
-    cursor: 'pointer',
-    textTransform: 'capitalize',
+    border: 'none', borderRadius: 8, padding: '6px 10px', background: 'transparent',
+    color: 'rgba(255,255,255,0.7)', fontSize: 12, fontFamily: '-apple-system, system-ui, sans-serif',
+    cursor: 'pointer', textTransform: 'capitalize',
   },
-  zoneBtnOn: {
-    background: 'rgba(255,255,255,0.12)',
-    color: '#fff',
-  },
+  zoneBtnOn: { background: 'rgba(255,255,255,0.12)', color: '#fff' },
   zoneHint: {
-    color: 'rgba(255,255,255,0.35)',
-    fontSize: 11,
-    marginLeft: 4,
+    color: 'rgba(255,255,255,0.35)', fontSize: 11, marginLeft: 4,
     fontFamily: '-apple-system, system-ui, sans-serif',
   },
   undo: {
-    position: 'absolute',
-    bottom: 16,
-    left: 16,
-    padding: '6px 10px',
-    borderRadius: 8,
-    background: 'rgba(44,44,46,0.6)',
-    color: 'rgba(255,255,255,0.45)',
-    fontSize: 12,
-    fontFamily: '-apple-system, system-ui, sans-serif',
-    pointerEvents: 'none',
-    zIndex: 18,
+    position: 'absolute', bottom: 16, left: 16, padding: '6px 10px', borderRadius: 8,
+    background: 'rgba(44,44,46,0.6)', color: 'rgba(255,255,255,0.45)', fontSize: 12,
+    fontFamily: '-apple-system, system-ui, sans-serif', pointerEvents: 'none', zIndex: 18,
   },
 };
