@@ -84,7 +84,7 @@ function CourtyardMesh({ court }: { court: ZoneCourtyard }) {
 }
 
 export function ZoneCourtyardsLayer({ courtyards }: Props) {
-  if (!courtyards.length) return null;
+  if (!courtyards?.length) return null;
   return (
     <group name="ZoneCourtyardsLayer">
       {courtyards.map((c) => (
