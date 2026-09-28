@@ -395,7 +395,7 @@ export function useAppController() {
     zoneDriveways, setZoneDriveways, zoneCourtyards, setZoneCourtyards,
     zoneType, setZoneType,
     userRoads, setUserRoads, roadProfile, setRoadProfile, roadOptions, setRoadOptions,
-    roadDrawMode, setRoadDrawMode, zoneDrawMode, setZoneDrawMode, roadDraftPts,
+    roadDrawMode, setRoadDrawMode, zoneDrawMode, setZoneDrawMode, roadDraftPts, setRoadDraftPts,
     drawingActive, setDrawingActive, selected, setSelected, undoTick, cmdStack,
     hour, setHour, sceneOpen, setSceneOpen, quality, setQuality, fogAmount, setFogAmount,
     showGrid, setShowGrid, showNorth, setShowNorth, units, setUnits, hover, setHover,
