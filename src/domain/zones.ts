@@ -44,6 +44,38 @@ export interface GeneratedBuilding {
   buildForm: ZoneBuildForm;
 }
 
+/** Internal zone driveway / fire lane — road-like, can connect to user roads via ports. */
+export interface ZoneDriveway {
+  id: string;
+  zoneId: string;
+  /** Centerline in scene meters. */
+  centerline: Point2D[];
+  halfWidthM: number;
+  kind: 'fire' | 'access' | 'service';
+  /** Endpoints on (or near) zone boundary for linking to external roads. */
+  ports: { point: Point2D; tangent: Point2D }[];
+}
+
+/** Green courtyard / plaza inside a zone. */
+export interface ZoneCourtyard {
+  id: string;
+  zoneId: string;
+  polygon: Point2D[];
+  kind: 'court' | 'plaza' | 'green';
+  trees: { x: number; y: number }[];
+}
+
+/**
+ * Full result of zone content generation.
+ * Driveways and courtyards are empty until those stages are implemented;
+ * contract is stable so UI/commands can adopt it now.
+ */
+export interface ZoneGeneratedContent {
+  buildings: GeneratedBuilding[];
+  driveways: ZoneDriveway[];
+  courtyards: ZoneCourtyard[];
+}
+
 export const ZONE_COLORS: Record<ZoneType, string> = {
   residential: '#5ac8fa',
   commercial: '#ffd60a',
